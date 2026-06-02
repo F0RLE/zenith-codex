@@ -48,6 +48,17 @@ fn get_state() -> UiState {
 }
 
 #[tauri::command]
+fn get_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
+}
+
+#[tauri::command]
 fn save_key(api_key: String, app: AppHandle, state: State<AppState>) -> Result<String, String> {
     enable_provider(api_key.trim())?;
     save_app_key(api_key.trim())?;
@@ -97,6 +108,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            get_platform,
             save_key,
             launch_saved_codex
         ])

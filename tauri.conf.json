@@ -4,7 +4,10 @@
   "version": "0.2.0",
   "identifier": "com.zenith.codex",
   "build": {
-    "frontendDist": "ui"
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "ui/dist"
   },
   "app": {
     "withGlobalTauri": true,

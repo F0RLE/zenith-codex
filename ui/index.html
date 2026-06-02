@@ -1,28 +1,12 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Zenith Codex</title>
-    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <form id="form" class="row">
-        <div class="key-field">
-          <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="API key" />
-          <button id="toggleKey" class="eye" type="button" aria-label="Показать API key" title="Показать API key">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
-        </div>
-        <button id="saveKey" type="submit" disabled>Сохранить</button>
-        <button id="launchCodex" type="button" disabled>Запустить</button>
-      </form>
-    </main>
-
-    <script src="./main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

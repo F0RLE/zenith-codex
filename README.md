@@ -2,6 +2,12 @@
 
 Native Tauri v2 desktop app for saving a Zenith API key into Codex.
 
+## Stack
+
+- Rust + Tauri 2 for the desktop shell, tray, Codex config writes, and process launch.
+- React + TypeScript + Vite for the frontend.
+- Platform-aware CSS for Windows, macOS, and Linux UI tuning.
+
 The endpoint is fixed to the Zenith API gateway:
 
 ```text
@@ -33,16 +39,25 @@ Existing `config.toml` is backed up before every write.
 - Only one app instance can run.
 - The app does not register Windows/macOS/Linux startup hooks.
 
+## Development
+
+```bash
+npm install
+npm run app:dev
+```
+
+Verify before committing:
+
+```bash
+npm run check
+npm run build
+cargo test --locked
+```
+
 ## Build
 
 ```bash
-cargo build --release
-```
-
-The ready Windows executable is copied to:
-
-```text
-windows/Zenith Codex.exe
+npm run app:build
 ```
 
 ## License

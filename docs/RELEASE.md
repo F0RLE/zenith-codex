@@ -17,6 +17,8 @@ git push origin v0.2.1
 
 The `Build` workflow runs on `main`, `nightly`, pull requests, and tags matching `v*`.
 
+The frontend is built with React, TypeScript, and Vite before Tauri packaging.
+
 For `v*` tags it creates a draft GitHub Release and uploads release artifacts for:
 
 - Windows x64
