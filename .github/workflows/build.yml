@@ -3,12 +3,29 @@ name: Build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, nightly]
+    tags:
+      - "v*"
   pull_request:
+    branches: [main, nightly]
+
+permissions:
+  contents: write
 
 jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: cargo test --locked
+
   build:
     name: ${{ matrix.name }}
+    needs: check
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -16,21 +33,35 @@ jobs:
         include:
           - name: windows-x64
             os: windows-latest
-            artifact-path: target/release/zenith-codex.exe
+          - name: macos-x64
+            os: macos-13
           - name: macos-arm64
             os: macos-latest
-            artifact-path: target/release/zenith-codex
           - name: linux-x64
             os: ubuntu-latest
-            artifact-path: target/release/zenith-codex
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
-      - run: cargo build --release
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: "Zenith Codex ${{ github.ref_name }}"
+          releaseBody: "Release build for Zenith Codex."
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, 'nightly') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          find target/release/bundle -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) -exec cp {} artifacts/ \;
       - uses: actions/upload-artifact@v4
         with:
           name: zenith-codex-${{ matrix.name }}
-          path: ${{ matrix.artifact-path }}
+          path: artifacts/*
+          if-no-files-found: error
