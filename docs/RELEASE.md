@@ -19,9 +19,12 @@ The `Build` workflow runs on `main`, `nightly`, pull requests, and tags matching
 
 For `v*` tags it creates a draft GitHub Release and uploads release artifacts for:
 
-- Windows
-- macOS
-- Linux
+- Windows x64
+- Windows arm64
+- macOS Apple Silicon arm64
+- macOS Intel
+- Linux x64
+- Linux arm64
 
 The app writes the Zenith provider into the local Codex config and uses:
 

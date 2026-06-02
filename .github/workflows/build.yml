@@ -33,10 +33,16 @@ jobs:
         include:
           - name: windows-x64
             os: windows-latest
-          - name: macos
+          - name: windows-arm64
+            os: windows-11-arm
+          - name: macos-arm64
             os: macos-latest
+          - name: macos-intel
+            os: macos-15-intel
           - name: linux-x64
             os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -54,10 +60,13 @@ jobs:
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, 'nightly') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
       - name: Collect release files
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p artifacts
-          find target/release/bundle -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) -exec cp {} artifacts/ \;
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $patterns = @("*.msi", "*.exe", "*.dmg", "*.app.tar.gz", "*.deb", "*.rpm", "*.AppImage")
+          Get-ChildItem -Path target/release/bundle -Recurse -File |
+            Where-Object { $file = $_; $patterns | Where-Object { $file.Name -like $_ } } |
+            Copy-Item -Destination artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: zenith-codex-${{ matrix.name }}
