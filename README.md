@@ -7,6 +7,7 @@ Native Tauri v2 desktop app for saving a Zenith API key into Codex.
 - Rust + Tauri 2 for the desktop shell, tray, Codex config writes, and process launch.
 - React + TypeScript + Vite for the frontend.
 - Platform-aware CSS for Windows, macOS, and Linux UI tuning.
+- Tauri updater for signed one-click updates from GitHub Releases.
 
 The endpoint is fixed to the Zenith API gateway:
 

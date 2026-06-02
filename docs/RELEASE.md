@@ -19,6 +19,8 @@ The `Build` workflow runs on `main`, `nightly`, pull requests, and tags matching
 
 The frontend is built with React, TypeScript, and Vite before Tauri packaging.
 
+Updates are served from the latest GitHub Release through `latest.json`. Tauri signs update artifacts with `TAURI_SIGNING_PRIVATE_KEY` from GitHub Secrets and verifies them with the public key stored in `tauri.conf.json`.
+
 For `v*` tags it creates a draft GitHub Release and uploads release artifacts for:
 
 - Windows x64

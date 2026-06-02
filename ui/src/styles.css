@@ -47,9 +47,9 @@ input {
 }
 
 .toolbar {
-  width: min(720px, 100%);
+  width: min(860px, 100%);
   display: grid;
-  grid-template-columns: minmax(250px, 1fr) 136px 136px;
+  grid-template-columns: minmax(250px, 1fr) 128px 128px 128px;
   gap: 10px;
   align-items: center;
 }
@@ -83,7 +83,8 @@ input {
 
 .icon-button,
 .save-button,
-.launch-button {
+.launch-button,
+.update-button {
   height: var(--control-height, 46px);
   border-radius: var(--radius, 8px);
   border: 1px solid transparent;
@@ -109,7 +110,8 @@ input {
 }
 
 .save-button,
-.launch-button {
+.launch-button,
+.update-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -124,7 +126,8 @@ input {
 }
 
 .save-button:hover:not(:disabled),
-.launch-button:hover:not(:disabled) {
+.launch-button:hover:not(:disabled),
+.update-button:hover:not(:disabled) {
   background: var(--button-hover, #2f7fcf);
 }
 
@@ -138,7 +141,8 @@ input {
 
 .icon-button:focus-visible,
 .save-button:focus-visible,
-.launch-button:focus-visible {
+.launch-button:focus-visible,
+.update-button:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus, #60d7ff) 26%, transparent);
 }
 

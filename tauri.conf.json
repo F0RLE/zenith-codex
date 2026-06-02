@@ -15,9 +15,9 @@
       {
         "label": "main",
         "title": "Zenith Codex",
-        "width": 760,
+        "width": 900,
         "height": 120,
-        "minWidth": 640,
+        "minWidth": 760,
         "minHeight": 110,
         "resizable": false,
         "center": true,
@@ -30,10 +30,19 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/icon.ico",
       "icons/zenith-sword.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGQkQyM0UwQzdFQzU2ODgKUldTSVZ1ekg0Q085VDRCRFcyWURGTGdsVHdDVTVJa1lmRmpMTGh3bXdLd0N4MmdaMEpkc2c2dzAK",
+      "endpoints": [
+        "https://github.com/F0RLE/zenith-codex/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

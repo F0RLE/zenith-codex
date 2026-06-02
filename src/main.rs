@@ -59,6 +59,11 @@ fn get_platform() -> &'static str {
 }
 
 #[tauri::command]
+fn get_system_locale() -> Option<String> {
+    system_locale()
+}
+
+#[tauri::command]
 fn save_key(api_key: String, app: AppHandle, state: State<AppState>) -> Result<String, String> {
     enable_provider(api_key.trim())?;
     save_app_key(api_key.trim())?;
@@ -83,6 +88,8 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             tray_toggle: Mutex::new(None),
         })
@@ -109,6 +116,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_platform,
+            get_system_locale,
             save_key,
             launch_saved_codex
         ])
@@ -117,7 +125,7 @@ fn main() {
 }
 
 fn build_tray(app: &AppHandle, state: &State<AppState>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Показать", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", ui_text("Show", "Показать"), true, None::<&str>)?;
     let toggle = MenuItem::with_id(
         app,
         "toggle",
@@ -125,7 +133,7 @@ fn build_tray(app: &AppHandle, state: &State<AppState>) -> tauri::Result<()> {
         provider_has_token(),
         None::<&str>,
     )?;
-    let quit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", ui_text("Quit", "Выйти"), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &toggle, &quit])?;
 
     {
@@ -177,10 +185,28 @@ fn refresh_tray_toggle(state: &State<AppState>) {
 
 fn tray_toggle_label() -> &'static str {
     if provider_has_token() {
-        "Остановить"
+        ui_text("Stop", "Остановить")
     } else {
-        "Запустить"
+        ui_text("Start", "Запустить")
     }
+}
+
+fn ui_text(en: &'static str, ru: &'static str) -> &'static str {
+    if system_language_is_russian() {
+        ru
+    } else {
+        en
+    }
+}
+
+fn system_language_is_russian() -> bool {
+    system_locale()
+        .map(|locale| locale.to_lowercase().starts_with("ru"))
+        .unwrap_or(false)
+}
+
+fn system_locale() -> Option<String> {
+    sys_locale::get_locale().or_else(|| env::var("LANG").ok())
 }
 
 fn enable_provider(api_key: &str) -> Result<(), String> {
