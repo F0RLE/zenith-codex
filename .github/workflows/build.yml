@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            artifact-path: target/release/zenith-codex.exe
+          - name: macos-arm64
+            os: macos-latest
+            artifact-path: target/release/zenith-codex
+          - name: linux-x64
+            os: ubuntu-latest
+            artifact-path: target/release/zenith-codex
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zenith-codex-${{ matrix.name }}
+          path: ${{ matrix.artifact-path }}

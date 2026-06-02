@@ -1,0 +1,10 @@
+target/
+gen/
+windows/
+
+*.pdb
+*.log
+*.tmp
+
+.DS_Store
+Thumbs.db
