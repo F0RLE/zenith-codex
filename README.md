@@ -55,6 +55,20 @@ npm run build
 cargo test --locked
 ```
 
+## Contributing
+
+Default development branch is `nightly`.
+
+Use this order:
+
+```text
+feature branch -> PR into nightly -> CI -> merge
+nightly -> PR into main -> CI -> merge
+main -> vX.Y.Z tag -> GitHub Release
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/RELEASE.md](docs/RELEASE.md) before opening release changes.
+
 ## Build
 
 ```bash

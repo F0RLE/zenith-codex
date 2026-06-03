@@ -5,8 +5,9 @@ GitHub default branch: `nightly`.
 Use this flow:
 
 1. Open development pull requests into `nightly`.
-2. When a build is ready, merge `nightly` into `main`.
-3. Create a tag on the `main` commit:
+2. When a build is ready, open a pull request from `nightly` into `main`.
+3. Merge into `main` only after CI is green.
+4. Create a tag on the `main` commit:
 
 ```bash
 git checkout main
