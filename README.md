@@ -61,6 +61,16 @@ cargo test --locked
 npm run app:build
 ```
 
+On Windows, local app builds automatically use Rust from
+`%LOCALAPPDATA%\Zenith\tools\rust` when it exists. Local builds do not create
+signed updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is set.
+
+Signed release builds are produced by GitHub Actions:
+
+```bash
+npm run app:build:signed
+```
+
 ## License
 
 MIT © FORLE
