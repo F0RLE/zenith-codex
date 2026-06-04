@@ -11,6 +11,7 @@ export const ru = {
     save: "Сохранить",
     saved: "Сохранено",
     launch: "Запустить",
+    reset: "Reset",
     update: "Обновить",
     refreshStats: "Обновить статистику",
   },

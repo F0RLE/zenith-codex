@@ -59,13 +59,13 @@ button {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(250px, 1fr) 116px 116px var(--control-height, 46px);
+  grid-template-columns: minmax(250px, 1fr) 116px 116px 108px var(--control-height, 46px);
   gap: 8px;
   align-items: center;
 }
 
 .toolbar.has-update {
-  grid-template-columns: minmax(250px, 1fr) 116px 116px 116px var(--control-height, 46px);
+  grid-template-columns: minmax(250px, 1fr) 116px 116px 108px 116px var(--control-height, 46px);
 }
 
 .api-field {
@@ -98,6 +98,7 @@ button {
 .icon-button,
 .save-button,
 .launch-button,
+.reset-button,
 .update-button,
 .refresh-button {
   height: var(--control-height, 46px);
@@ -126,6 +127,7 @@ button {
 
 .save-button,
 .launch-button,
+.reset-button,
 .update-button,
 .refresh-button {
   display: inline-flex;
@@ -144,6 +146,7 @@ button {
 
 .save-button:hover:not(:disabled),
 .launch-button:hover:not(:disabled),
+.reset-button:hover:not(:disabled),
 .update-button:hover:not(:disabled),
 .refresh-button:hover:not(:disabled) {
   background: var(--button-hover, #2f7fcf);
@@ -154,6 +157,15 @@ button {
   padding: 0;
   background: #203043;
   color: #dcecff;
+}
+
+.reset-button {
+  background: #314256;
+  color: #eaf2ff;
+}
+
+.reset-button:hover:not(:disabled) {
+  background: #415873;
 }
 
 .refresh-button:hover:not(:disabled) {
@@ -171,6 +183,7 @@ button {
 .icon-button:focus-visible,
 .save-button:focus-visible,
 .launch-button:focus-visible,
+.reset-button:focus-visible,
 .update-button:focus-visible,
 .refresh-button:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus, #60d7ff) 26%, transparent);
@@ -322,15 +335,16 @@ svg {
   }
 
   .toolbar {
-    grid-template-columns: minmax(250px, 1fr) repeat(3, var(--control-height, 46px));
+    grid-template-columns: minmax(250px, 1fr) repeat(4, var(--control-height, 46px));
   }
 
   .toolbar.has-update {
-    grid-template-columns: minmax(250px, 1fr) repeat(4, var(--control-height, 46px));
+    grid-template-columns: minmax(250px, 1fr) repeat(5, var(--control-height, 46px));
   }
 
   .save-button,
   .launch-button,
+  .reset-button,
   .update-button {
     width: var(--control-height, 46px);
     padding: 0;
@@ -338,6 +352,7 @@ svg {
 
   .save-button span,
   .launch-button span,
+  .reset-button span,
   .update-button span {
     position: absolute;
     width: 1px;
@@ -359,11 +374,11 @@ svg {
   }
 
   .toolbar {
-    grid-template-columns: 1fr repeat(3, var(--control-height, 46px));
+    grid-template-columns: 1fr repeat(4, var(--control-height, 46px));
   }
 
   .toolbar.has-update {
-    grid-template-columns: 1fr repeat(4, var(--control-height, 46px));
+    grid-template-columns: 1fr repeat(5, var(--control-height, 46px));
   }
 
   .stats-grid {

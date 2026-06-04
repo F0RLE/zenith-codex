@@ -1,4 +1,4 @@
-import { Download, Eye, EyeOff, Play, RefreshCw, Save } from "lucide-react";
+import { Download, Eye, EyeOff, Play, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -9,6 +9,7 @@ import {
   launchCodex,
   onStateChanged,
   Platform,
+  resetKey,
   saveKey,
   updateAndRelaunch,
   UiState,
@@ -40,6 +41,7 @@ export function App() {
   const canSave = apiKey.trim().length > 0 && !busy;
   const canLaunch = state.providerActive && !busy;
   const canUpdate = !busy && !updating;
+  const canReset = (state.providerActive || Boolean(state.savedApiKey)) && !busy;
   const canRefreshStats = Boolean((apiKey || state.savedApiKey).trim()) && !statsLoading;
 
   const platformLabel = useMemo(() => {
@@ -155,6 +157,21 @@ export function App() {
     }
   }
 
+  async function handleReset() {
+    if (!canReset) return;
+
+    setBusy(true);
+    setSaved(false);
+    try {
+      await resetKey();
+      setApiKey("");
+      setKeyStats(null);
+      await refreshState();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className={`app platform-${platform}`} aria-label={t("app.label", { platform: platformLabel })}>
       <section className="panel">
@@ -191,6 +208,11 @@ export function App() {
           <button className="launch-button" type="button" disabled={!canLaunch} onClick={handleLaunch}>
             <Play aria-hidden />
             <span>{t("actions.launch")}</span>
+          </button>
+
+          <button className="reset-button" type="button" disabled={!canReset} onClick={handleReset}>
+            <RotateCcw aria-hidden />
+            <span>{t("actions.reset")}</span>
           </button>
 
           {updateVisible ? (

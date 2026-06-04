@@ -1,12 +1,12 @@
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     files::{atomic_write, escape_json_string, escape_toml_string, unquote_toml_string},
-    key_storage::{load_saved_app_key, save_app_key},
+    key_storage::{delete_saved_app_key, load_saved_app_key, save_app_key},
     platform::default_codex_home,
 };
 
@@ -53,6 +53,36 @@ pub fn disable_provider() -> Result<(), String> {
     backup_config(&config_path, &original)?;
     let next = remove_zenith_provider(&original);
     atomic_write(&config_path, &next)
+}
+
+pub fn reset_provider() -> Result<(), String> {
+    let codex_home = default_codex_home();
+    let config_path = codex_home.join(CONFIG_FILE);
+    let original = fs::read_to_string(&config_path).unwrap_or_default();
+    let previous_model_provider = latest_backup_model_provider(&codex_home);
+    let mut next = remove_zenith_provider(&original);
+
+    if let Some(model_provider) = previous_model_provider {
+        next = remove_key_line(&next, "model_provider");
+        let preserved = next.trim().to_string();
+        next = format!(
+            "model_provider = \"{}\"",
+            escape_toml_string(&model_provider)
+        );
+        if !preserved.is_empty() {
+            next.push_str("\n\n");
+            next.push_str(&preserved);
+        }
+    }
+
+    if next != original {
+        backup_config(&config_path, &original)?;
+        atomic_write(&config_path, next.trim_start())?;
+    }
+
+    remove_zenith_auth_if_owned();
+    delete_saved_app_key();
+    Ok(())
 }
 
 pub fn provider_has_token() -> bool {
@@ -119,6 +149,32 @@ fn write_codex_auth(api_key: &str) -> Result<(), String> {
     atomic_write(&codex_home.join("auth.json"), &content)
 }
 
+fn remove_zenith_auth_if_owned() {
+    let Some(saved_key) = load_saved_app_key() else {
+        return;
+    };
+    let auth_path = default_codex_home().join("auth.json");
+    let Ok(content) = fs::read_to_string(&auth_path) else {
+        return;
+    };
+    let Ok(auth) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return;
+    };
+    let key_matches = auth
+        .get("OPENAI_API_KEY")
+        .and_then(serde_json::Value::as_str)
+        .map(|key| key.trim() == saved_key.trim())
+        .unwrap_or(false);
+    let auth_mode_matches = auth
+        .get("auth_mode")
+        .and_then(serde_json::Value::as_str)
+        .map(|mode| mode == "apikey")
+        .unwrap_or(false);
+    if key_matches && auth_mode_matches {
+        let _ = fs::remove_file(auth_path);
+    }
+}
+
 fn upsert_zenith_provider(original: &str) -> String {
     let without_old = remove_zenith_provider(original);
     let without_model_provider = remove_key_line(&without_old, "model_provider");
@@ -157,6 +213,43 @@ fn remove_key_line(content: &str, key: &str) -> String {
         .filter(|line| !line.trim().starts_with(&prefix))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn latest_backup_model_provider(codex_home: &Path) -> Option<String> {
+    latest_backup_path(codex_home).and_then(|path| {
+        let content = fs::read_to_string(path).ok()?;
+        read_model_provider(&content)
+    })
+}
+
+fn latest_backup_path(codex_home: &Path) -> Option<PathBuf> {
+    let mut backups = fs::read_dir(codex_home)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_string_lossy();
+            if name.starts_with(&format!("{CONFIG_FILE}.")) && name.ends_with(BACKUP_SUFFIX) {
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, path))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    backups.sort_by_key(|(modified, _)| *modified);
+    backups.pop().map(|(_, path)| path)
+}
+
+fn read_model_provider(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("model_provider = ")?;
+        let provider = unquote_toml_string(value.trim())?;
+        (!provider.eq_ignore_ascii_case(PROVIDER_ID)
+            && !provider.eq_ignore_ascii_case(LEGACY_PROVIDER_ID)
+            && !provider.is_empty())
+        .then_some(provider)
+    })
 }
 
 fn remove_table(content: &str, header: &str) -> String {

@@ -46,6 +46,10 @@ export function saveKey(apiKey: string) {
   return invoke<string>("save_key", { apiKey });
 }
 
+export function resetKey() {
+  return invoke<string>("reset_key");
+}
+
 export function launchCodex() {
   return invoke<string>("launch_saved_codex");
 }

@@ -11,6 +11,7 @@ export const en = {
     save: "Save",
     saved: "Saved",
     launch: "Launch",
+    reset: "Reset",
     update: "Update",
     refreshStats: "Refresh stats",
   },

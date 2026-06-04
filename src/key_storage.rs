@@ -29,6 +29,11 @@ pub fn load_saved_app_key() -> Option<String> {
     (!key.is_empty()).then_some(key)
 }
 
+pub fn delete_saved_app_key() {
+    let _ = keyring_entry().delete_credential();
+    let _ = fs::remove_file(legacy_saved_key_path());
+}
+
 fn keyring_entry() -> keyring::Entry {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).expect("valid keyring service and user")
 }

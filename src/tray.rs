@@ -4,7 +4,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, State, Wry,
+    AppHandle, Emitter, Manager, State, Url, Wry,
 };
 
 use crate::{
@@ -14,14 +14,21 @@ use crate::{
 
 pub struct AppState {
     tray_toggle: Mutex<Option<MenuItem<Wry>>>,
+    home_url: Mutex<Option<Url>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             tray_toggle: Mutex::new(None),
+            home_url: Mutex::new(None),
         }
     }
+}
+
+pub fn remember_home_url(state: &State<AppState>, url: Url) {
+    let mut home_url = state.home_url.lock().expect("app state poisoned");
+    *home_url = Some(url);
 }
 
 pub fn build_tray(app: &AppHandle, state: &State<AppState>) -> tauri::Result<()> {
@@ -72,8 +79,28 @@ pub fn refresh_tray_toggle(state: &State<AppState>) {
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let should_restore = window
+            .url()
+            .map(|url| url.scheme() == "about")
+            .unwrap_or(false);
+        if should_restore {
+            let state = app.state::<AppState>();
+            let home_url = state.home_url.lock().expect("app state poisoned").clone();
+            if let Some(url) = home_url {
+                let _ = window.navigate(url);
+            }
+        }
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+pub fn hide_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(url) = Url::parse("about:blank") {
+            let _ = window.navigate(url);
+        }
+        let _ = window.hide();
     }
 }
 

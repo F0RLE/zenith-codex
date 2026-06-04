@@ -8,15 +8,22 @@ mod platform;
 mod tray;
 
 use serde::Serialize;
-use std::{env, net::TcpListener};
+use std::{
+    env,
+    io::Write,
+    net::{TcpListener, TcpStream},
+    thread,
+};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 use crate::{
-    codex_config::{enable_provider, ensure_provider_on_launch, provider_has_token},
+    codex_config::{
+        enable_provider, ensure_provider_on_launch, provider_has_token, reset_provider,
+    },
     key_storage::{load_saved_app_key, save_app_key},
     launcher::launch_codex,
     platform::{platform_name, system_locale},
-    tray::{build_tray, refresh_tray_toggle, AppState},
+    tray::{build_tray, hide_main_window, refresh_tray_toggle, remember_home_url, AppState},
 };
 
 const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:47831";
@@ -56,22 +63,33 @@ fn save_key(api_key: String, app: AppHandle, state: State<AppState>) -> Result<S
 }
 
 #[tauri::command]
+fn reset_key(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+    reset_provider()?;
+    refresh_tray_toggle(&state);
+    let _ = app.emit("zenith-state-changed", ());
+    Ok("Настройки восстановлены.".to_string())
+}
+
+#[tauri::command]
 fn launch_saved_codex(app: AppHandle) -> Result<String, String> {
     let _ = ensure_provider_on_launch();
     if !provider_has_token() {
         return Err("Сначала сохраните API key.".to_string());
     }
     let message = launch_codex();
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
+    hide_main_window(&app);
     Ok(message)
 }
 
 fn main() {
     let _single_instance = match TcpListener::bind(SINGLE_INSTANCE_ADDR) {
         Ok(listener) => listener,
-        Err(_) => return,
+        Err(_) => {
+            if let Ok(mut stream) = TcpStream::connect(SINGLE_INSTANCE_ADDR) {
+                let _ = stream.write_all(b"show");
+            }
+            return;
+        }
     };
 
     tauri::Builder::default()
@@ -84,10 +102,23 @@ fn main() {
             let state = app.state::<AppState>();
             build_tray(&handle, &state)?;
 
-            if env::args().any(|arg| arg == "--tray") {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(url) = window.url() {
+                    remember_home_url(&state, url);
                 }
+            }
+
+            let instance_handle = handle.clone();
+            thread::spawn(move || {
+                for stream in _single_instance.incoming() {
+                    if stream.is_ok() {
+                        crate::tray::show_main_window(&instance_handle);
+                    }
+                }
+            });
+
+            if env::args().any(|arg| arg == "--tray") {
+                hide_main_window(&handle);
             }
 
             Ok(())
@@ -95,6 +126,11 @@ fn main() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                if let Ok(url) = tauri::Url::parse("about:blank") {
+                    if let Some(webview) = window.webviews().into_iter().next() {
+                        let _ = webview.navigate(url);
+                    }
+                }
                 let _ = window.hide();
             }
         })
@@ -103,6 +139,7 @@ fn main() {
             get_platform,
             get_system_locale,
             save_key,
+            reset_key,
             launch_saved_codex
         ])
         .run(tauri::generate_context!())
