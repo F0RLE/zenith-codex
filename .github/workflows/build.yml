@@ -70,17 +70,61 @@ jobs:
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: "Zenith Codex ${{ github.ref_name }}"
-          releaseBody: "Release build for Zenith Codex."
+          releaseBody: |
+            ## Downloads
+
+            | Architecture | Windows | Ubuntu | macOS |
+            |---|---|---|---|
+            | x86-64 (64-bit) | [EXE](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-windows-x64.exe) · [Setup](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-windows-x64-setup.exe) · [MSI](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-windows-x64.msi) | [AppImage](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-linux-x64.AppImage) · [DEB](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-linux-x64.deb) · [RPM](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-linux-x64.rpm) | [DMG](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-macos-intel.dmg) |
+            | AArch64 (ARM64) | [EXE](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-windows-arm64.exe) · [Setup](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-windows-arm64-setup.exe) · [MSI](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-windows-arm64.msi) | [AppImage](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-linux-arm64.AppImage) · [DEB](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-linux-arm64.deb) · [RPM](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-linux-arm64.rpm) | [DMG](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/zenith-codex-macos-arm64.dmg) |
+
+            Windows: use **Setup** for normal installation and auto-updates, or **EXE** for a portable launch.
+
+            ## Changelog
+
+            - Added reset to restore a previous Codex provider.
+            - Restores the existing window on second launch.
+            - Unloads the frontend when the window is hidden to tray.
+            - Removes the white startup flash.
+            - Refreshes API key statistics automatically.
           releaseDraft: ${{ !startsWith(github.ref, 'refs/tags/') }}
           prerelease: ${{ contains(github.ref_name, 'nightly') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
       - name: Collect release files
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          function Copy-First($Filter, $Destination) {
+            $file = Get-ChildItem -Path target/release/bundle -Recurse -File -Filter $Filter | Select-Object -First 1
+            if ($file) {
+              Copy-Item $file.FullName $Destination
+            }
+          }
           $patterns = @("*.msi", "*.exe", "*.dmg", "*.app.tar.gz", "*.deb", "*.rpm", "*.AppImage", "*.sig", "latest.json")
           Get-ChildItem -Path target/release/bundle -Recurse -File |
             Where-Object { $file = $_; $patterns | Where-Object { $file.Name -like $_ } } |
             Copy-Item -Destination artifacts
+          if ($env:RUNNER_OS -eq "Windows" -and (Test-Path "target/release/zenith-codex.exe")) {
+            Copy-Item "target/release/zenith-codex.exe" "artifacts/zenith-codex-${{ matrix.name }}.exe"
+            Copy-First "*.msi" "artifacts/zenith-codex-${{ matrix.name }}.msi"
+            Copy-First "*setup.exe" "artifacts/zenith-codex-${{ matrix.name }}-setup.exe"
+          }
+          if ($env:RUNNER_OS -eq "macOS") {
+            Copy-First "*.dmg" "artifacts/zenith-codex-${{ matrix.name }}.dmg"
+            Copy-First "*.app.tar.gz" "artifacts/zenith-codex-${{ matrix.name }}.app.tar.gz"
+          }
+          if ($env:RUNNER_OS -eq "Linux") {
+            Copy-First "*.AppImage" "artifacts/zenith-codex-${{ matrix.name }}.AppImage"
+            Copy-First "*.deb" "artifacts/zenith-codex-${{ matrix.name }}.deb"
+            Copy-First "*.rpm" "artifacts/zenith-codex-${{ matrix.name }}.rpm"
+          }
+      - name: Upload stable release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Get-ChildItem "artifacts/zenith-codex-${{ matrix.name }}*" -File -ErrorAction SilentlyContinue |
+            ForEach-Object { gh release upload $env:GITHUB_REF_NAME $_.FullName --clobber }
       - uses: actions/upload-artifact@v7
         with:
           name: zenith-codex-${{ matrix.name }}

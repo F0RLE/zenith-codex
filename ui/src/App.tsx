@@ -20,6 +20,7 @@ const initialState: UiState = {
   providerActive: false,
   savedApiKey: "",
 };
+const STATS_REFRESH_MS = 60_000;
 
 export function App() {
   const [platform, setPlatform] = useState<Platform>("windows");
@@ -42,7 +43,9 @@ export function App() {
   const canLaunch = state.providerActive && !busy;
   const canUpdate = !busy && !updating;
   const canReset = (state.providerActive || Boolean(state.savedApiKey)) && !busy;
-  const canRefreshStats = Boolean((apiKey || state.savedApiKey).trim()) && !statsLoading;
+  const statsKey = (apiKey || state.savedApiKey).trim();
+  const hasStatsKey = Boolean(statsKey);
+  const canRefreshStats = hasStatsKey && !statsLoading;
 
   const platformLabel = useMemo(() => {
     if (platform === "macos") return "macOS";
@@ -127,6 +130,19 @@ export function App() {
       unsubscribe.then((fn) => fn()).catch(() => undefined);
     };
   }, [installUpdate]);
+
+  useEffect(() => {
+    if (!hasStatsKey) {
+      setKeyStats(null);
+      setStatsError(false);
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      refreshStats(statsKey).catch(() => undefined);
+    }, STATS_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [hasStatsKey, statsKey]);
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -242,16 +258,18 @@ export function App() {
           {statsError ? <span className="error-text">{t("stats.failed")}</span> : null}
         </div>
 
-        <div className="stats-grid" aria-label={t("stats.label")}>
-          <Stat label={t("stats.balance")} value={formatMoney(keyStats?.balanceCents)} accent />
-          <Stat label={t("stats.spent")} value={formatMoney(keyStats?.spentCents)} />
-          <Stat label={t("stats.requests")} value={formatNumber(keyStats?.requests)} />
-          <Stat label={t("stats.totalTokens")} value={formatNumber(keyStats?.totalTokens)} />
-          <Stat label={t("stats.inputTokens")} value={formatNumber(keyStats?.inputTokens)} />
-          <Stat label={t("stats.cachedTokens")} value={formatNumber(keyStats?.cachedInputTokens)} />
-          <Stat label={t("stats.outputTokens")} value={formatNumber(keyStats?.outputTokens)} />
-          <Stat label={t("stats.month")} value={formatMoney(keyStats?.monthlySpentCents)} />
-        </div>
+        {hasStatsKey ? (
+          <div className="stats-grid" aria-label={t("stats.label")}>
+            <Stat label={t("stats.balance")} value={formatMoney(keyStats?.balanceCents)} accent />
+            <Stat label={t("stats.spent")} value={formatMoney(keyStats?.spentCents)} />
+            <Stat label={t("stats.requests")} value={formatNumber(keyStats?.requests)} />
+            <Stat label={t("stats.totalTokens")} value={formatNumber(keyStats?.totalTokens)} />
+            <Stat label={t("stats.inputTokens")} value={formatNumber(keyStats?.inputTokens)} />
+            <Stat label={t("stats.cachedTokens")} value={formatNumber(keyStats?.cachedInputTokens)} />
+            <Stat label={t("stats.outputTokens")} value={formatNumber(keyStats?.outputTokens)} />
+            <Stat label={t("stats.month")} value={formatMoney(keyStats?.monthlySpentCents)} />
+          </div>
+        ) : null}
       </section>
     </main>
   );
