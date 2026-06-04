@@ -16,6 +16,7 @@ use std::{
     thread,
 };
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
+use url::Url;
 
 use crate::{
     codex_config::{
@@ -90,10 +91,25 @@ fn launch_saved_codex(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn open_top_up_url(url: String) -> Result<(), String> {
-    if !url.starts_with(TOP_UP_BOT_URL) {
+    if !is_allowed_top_up_url(&url) {
         return Err("Unsupported top-up URL.".to_string());
     }
     open_external_url(&url)
+}
+
+fn is_allowed_top_up_url(value: &str) -> bool {
+    let Ok(input) = Url::parse(value) else {
+        return false;
+    };
+    let Ok(base) = Url::parse(TOP_UP_BOT_URL) else {
+        return false;
+    };
+
+    input.scheme() == base.scheme()
+        && input.host_str() == base.host_str()
+        && input.port_or_known_default() == base.port_or_known_default()
+        && input.path() == base.path()
+        && input.fragment().is_none()
 }
 
 fn open_external_url(url: &str) -> Result<(), String> {

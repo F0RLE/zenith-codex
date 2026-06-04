@@ -44,6 +44,7 @@ export type UsageLogEntry = {
 };
 
 const DEFAULT_API_BASE_URL = "https://api.zenithmarket.dev/v1";
+const TOP_UP_BOT_URL = "https://t.me/zenith_service_bot";
 const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_ZENITH_API_BASE_URL);
 const BROWSER_KEY_STORAGE = "zenith-codex.dev.api-key";
 
@@ -106,6 +107,10 @@ export function launchCodex() {
 }
 
 export function openTopUpUrl(url: string) {
+  if (!isAllowedTopUpUrl(url)) {
+    return Promise.reject(new Error("Unsupported top-up URL."));
+  }
+
   if (!isTauriRuntime()) {
     window.open(url, "_blank", "noopener,noreferrer");
     return Promise.resolve();
@@ -280,6 +285,16 @@ export function onStateChanged(callback: () => void) {
 
 function normalizeApiBaseUrl(value?: string) {
   return (value?.trim() || DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+}
+
+function isAllowedTopUpUrl(value: string) {
+  try {
+    const input = new URL(value);
+    const base = new URL(TOP_UP_BOT_URL);
+    return input.protocol === base.protocol && input.host === base.host && input.pathname === base.pathname && input.hash === "";
+  } catch {
+    return false;
+  }
 }
 
 function isTauriRuntime() {

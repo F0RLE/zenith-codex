@@ -44,9 +44,7 @@ pub fn launch_codex() -> String {
 pub fn is_codex_running() -> bool {
     #[cfg(target_os = "windows")]
     {
-        return is_windows_process_running("codex.exe")
-            || is_windows_process_running("Codex.exe")
-            || is_windows_process_running("OpenAI.Codex.exe");
+        return is_windows_any_process_running(&["codex.exe", "Codex.exe", "OpenAI.Codex.exe"]);
     }
 
     #[cfg(target_os = "macos")]
@@ -81,17 +79,18 @@ fn start_detached(path: PathBuf) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn is_windows_process_running(image_name: &str) -> bool {
-    let Ok(output) = Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {image_name}"), "/NH"])
-        .output()
-    else {
+fn is_windows_any_process_running(image_names: &[&str]) -> bool {
+    let Ok(output) = Command::new("tasklist").args(["/NH"]).output() else {
         return false;
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().any(|line| {
-        line.to_ascii_lowercase()
-            .starts_with(&image_name.to_ascii_lowercase())
+    let lines = stdout
+        .lines()
+        .map(|line| line.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    image_names.iter().any(|image_name| {
+        let image_name = image_name.to_ascii_lowercase();
+        lines.iter().any(|line| line.starts_with(&image_name))
     })
 }
 

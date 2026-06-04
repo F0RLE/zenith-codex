@@ -330,13 +330,13 @@ base_url = "https://api.zenithmarket.dev/v1"
 
 [model_providers.openai]
 name = "OpenAI"
-base_url = "https://api.openai.com/v1"
+base_url = "https://gateway.example/v1"
 "#;
 
         let next = remove_zenith_provider(original);
 
         assert!(next.contains("[model_providers.openai]"));
-        assert!(next.contains(r#"base_url = "https://api.openai.com/v1""#));
+        assert!(next.contains(r#"base_url = "https://gateway.example/v1""#));
         assert!(!next.contains("[model_providers.codex_local_access]"));
         assert!(!next.contains(r#"model_provider = "codex_local_access""#));
     }

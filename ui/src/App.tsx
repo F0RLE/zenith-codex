@@ -101,6 +101,7 @@ export function App() {
     if (!key) {
       setHistory([]);
       setHistoryCanLoadMore(false);
+      setHistoryError(false);
       return;
     }
 

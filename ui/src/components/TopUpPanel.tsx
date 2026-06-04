@@ -75,7 +75,12 @@ export function TopUpPanel({ disabled, error, loading, onTopUp }: TopUpPanelProp
 }
 
 function parseUsdAmount(value: string) {
-  const normalized = value.replace(",", ".").trim();
+  const trimmed = value.trim();
+  const commaCount = trimmed.match(/,/g)?.length ?? 0;
+  const normalized =
+    commaCount > 1 || /,\d{3}(\D|$)/.test(trimmed)
+      ? trimmed.replace(/,/g, "")
+      : trimmed.replace(",", ".");
   if (!normalized) return null;
   const amount = Number(normalized);
   if (!Number.isFinite(amount) || amount < 1 || amount > 10_000) return null;

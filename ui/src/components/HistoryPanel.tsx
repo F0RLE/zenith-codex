@@ -86,5 +86,6 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit",
     month: "2-digit",
+    year: "numeric",
   }).format(date);
 }
