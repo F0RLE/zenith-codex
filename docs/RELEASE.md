@@ -11,8 +11,8 @@ Use this flow:
 ```bash
 git checkout main
 git pull origin main
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 The `Build` workflow runs on `main`, `nightly`, pull requests, and tags matching `v*`.

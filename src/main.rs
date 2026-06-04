@@ -23,7 +23,7 @@ use crate::{
     key_storage::{load_saved_app_key, save_app_key},
     launcher::launch_codex,
     platform::{platform_name, system_locale},
-    tray::{build_tray, hide_main_window, refresh_tray_toggle, remember_home_url, AppState},
+    tray::{build_tray, close_main_window, refresh_tray_toggle, AppState},
 };
 
 const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:47831";
@@ -77,7 +77,7 @@ fn launch_saved_codex(app: AppHandle) -> Result<String, String> {
         return Err("Сначала сохраните API key.".to_string());
     }
     let message = launch_codex();
-    hide_main_window(&app);
+    close_main_window(&app);
     Ok(message)
 }
 
@@ -102,12 +102,6 @@ fn main() {
             let state = app.state::<AppState>();
             build_tray(&handle, &state)?;
 
-            if let Some(window) = app.get_webview_window("main") {
-                if let Ok(url) = window.url() {
-                    remember_home_url(&state, url);
-                }
-            }
-
             let instance_handle = handle.clone();
             thread::spawn(move || {
                 for stream in _single_instance.incoming() {
@@ -118,7 +112,7 @@ fn main() {
             });
 
             if env::args().any(|arg| arg == "--tray") {
-                hide_main_window(&handle);
+                close_main_window(&handle);
             }
 
             Ok(())
@@ -126,12 +120,7 @@ fn main() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if let Ok(url) = tauri::Url::parse("about:blank") {
-                    if let Some(webview) = window.webviews().into_iter().next() {
-                        let _ = webview.navigate(url);
-                    }
-                }
-                let _ = window.hide();
+                let _ = window.destroy();
             }
         })
         .invoke_handler(tauri::generate_handler![
