@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://api.zenithmarket.dev https://github.com https://*.githubusercontent.com http://127.0.0.1:*;"
     }
   },
   "bundle": {
