@@ -26,8 +26,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
-      - run: npm run check
-      - run: cargo test --locked
+      - run: npm run verify
 
   build:
     name: ${{ matrix.name }}

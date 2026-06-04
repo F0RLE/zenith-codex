@@ -4,8 +4,8 @@ GitHub default branch: `main`.
 
 Use this flow:
 
-1. Open development pull requests into `main`.
-2. Merge into `main` only after CI is green.
+1. Open development pull requests into `nightly`.
+2. Promote `nightly` into `main` through a pull request after CI is green.
 3. Create a tag on the `main` commit:
 
 ```bash

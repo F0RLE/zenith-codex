@@ -24,9 +24,7 @@ Do not push product changes directly to `main`.
 Run these before opening a pull request:
 
 ```bash
-npm run check
-npm run build
-cargo test --locked
+npm run verify
 ```
 
 For packaging changes, also run:
@@ -40,6 +38,7 @@ Full release builds are verified by GitHub Actions on Windows, macOS, Linux, x64
 ## Scope
 
 - Frontend code lives in `ui/src`.
+- Focused React components live in `ui/src/components`.
 - Tauri/Rust app code lives in `src`.
 - Tauri capabilities live in `capabilities`.
 - Build helpers live in `scripts`.

@@ -14,9 +14,7 @@
 Run before committing:
 
 ```bash
-npm run check
-npm run build
-cargo test --locked
+npm run verify
 ```
 
 For packaging changes:
@@ -28,7 +26,9 @@ npm run app:build
 ## Map
 
 - `ui/src`: React + TypeScript frontend.
+- `ui/src/components`: focused UI components.
+- `ui/src/format.ts`: UI formatting helpers.
 - `src`: Rust/Tauri desktop logic, tray, Codex config writes, process launch.
 - `capabilities`: Tauri permissions.
-- `scripts`: local Tauri dev/build environment helpers.
+- `scripts`: local clean and Tauri dev/build environment helpers.
 - `docs`: release and contributor documentation.

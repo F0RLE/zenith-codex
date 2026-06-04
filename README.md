@@ -1,44 +1,28 @@
 # Zenith Codex
 
-Native Tauri v2 desktop app for saving a Zenith API key into Codex.
+Desktop app for connecting Codex to Zenith API.
 
-## Stack
+## What It Does
 
-- Rust + Tauri 2 for the desktop shell, tray, Codex config writes, and process launch.
-- React + TypeScript + Vite for the frontend.
-- Platform-aware CSS for Windows, macOS, and Linux UI tuning.
-- Tauri updater for signed one-click updates from GitHub Releases.
+- Saves your Zenith API key.
+- Writes the Zenith provider into Codex config.
+- Launches Codex from the app.
+- Shows key balance, spending, requests, and token usage.
+- Opens the Telegram bot for balance top-ups.
 
-The endpoint is fixed to the Zenith API gateway:
+Telegram bot: [@zenith_service_bot](https://t.me/zenith_service_bot)
+
+## API Gateway
+
+The app uses:
 
 ```text
 https://api.zenithmarket.dev/v1
 ```
 
-The app writes this to Codex `config.toml`:
+## Updates
 
-```toml
-model_provider = "codex_local_access"
-
-[model_providers.codex_local_access]
-name = "Zenith"
-base_url = "https://api.zenithmarket.dev/v1"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = false
-experimental_bearer_token = "..."
-```
-
-Existing `config.toml` is backed up before every write.
-
-## Behavior
-
-- The UI contains only API key input, save, and launch.
-- The tray menu contains `Показать`, one `Запустить/Остановить` item, and `Выйти`.
-- `Запустить` is disabled until a Zenith API key is saved.
-- Closing the window hides it to tray.
-- Only one app instance can run.
-- The app does not register Windows/macOS/Linux startup hooks.
+Zenith Codex checks GitHub Releases on startup and installs signed updates automatically when a new version is available.
 
 ## Development
 
@@ -47,44 +31,27 @@ npm install
 npm run app:dev
 ```
 
-Verify before committing:
+To test against a local control API instead of production:
+
+```powershell
+$env:VITE_ZENITH_API_BASE_URL="http://127.0.0.1:8080/v1"
+npm run app:dev
+```
+
+Verify before release:
 
 ```bash
-npm run check
-npm run build
-cargo test --locked
+npm run verify
 ```
 
-## Contributing
-
-Default development branch is `nightly`.
-
-Use this order:
-
-```text
-feature branch -> PR into nightly -> CI -> merge
-nightly -> PR into main -> CI -> merge
-main -> vX.Y.Z tag -> GitHub Release
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/RELEASE.md](docs/RELEASE.md) before opening release changes.
-
-## Build
+Clean local frontend artifacts:
 
 ```bash
-npm run app:build
+npm run clean
 ```
 
-On Windows, local app builds automatically use Rust from
-`%LOCALAPPDATA%\Zenith\tools\rust` when it exists. Local builds do not create
-signed updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is set.
-
-Signed release builds are produced by GitHub Actions:
-
-```bash
-npm run app:build:signed
-```
+Release and contributor workflow lives in [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/RELEASE.md](docs/RELEASE.md).
 
 ## License
 
-MIT © FORLE
+MIT

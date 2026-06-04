@@ -12,34 +12,42 @@ use std::{
     env,
     io::Write,
     net::{TcpListener, TcpStream},
+    process::Command,
     thread,
 };
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 
 use crate::{
     codex_config::{
-        enable_provider, ensure_provider_on_launch, provider_has_token, reset_provider,
+        enable_provider, ensure_provider_on_launch, load_api_key_for_launch, provider_has_token,
+        reset_provider,
     },
     key_storage::{load_saved_app_key, save_app_key},
-    launcher::launch_codex,
+    launcher::{is_codex_running, launch_codex},
     platform::{platform_name, system_locale},
-    tray::{build_tray, close_main_window, refresh_tray_toggle, AppState},
+    tray::{build_tray, close_main_window, AppState},
 };
 
 const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:47831";
+const TOP_UP_BOT_URL: &str = "https://t.me/zenith_service_bot";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UiState {
     provider_active: bool,
+    codex_running: bool,
     saved_api_key: String,
 }
 
 #[tauri::command]
 fn get_state() -> UiState {
+    let _ = ensure_provider_on_launch();
     UiState {
         provider_active: provider_has_token(),
-        saved_api_key: load_saved_app_key().unwrap_or_default(),
+        codex_running: is_codex_running(),
+        saved_api_key: load_saved_app_key()
+            .or_else(load_api_key_for_launch)
+            .unwrap_or_default(),
     }
 }
 
@@ -54,18 +62,16 @@ fn get_system_locale() -> Option<String> {
 }
 
 #[tauri::command]
-fn save_key(api_key: String, app: AppHandle, state: State<AppState>) -> Result<String, String> {
+fn save_key(api_key: String, app: AppHandle) -> Result<String, String> {
     enable_provider(api_key.trim())?;
     save_app_key(api_key.trim())?;
-    refresh_tray_toggle(&state);
     let _ = app.emit("zenith-state-changed", ());
     Ok("Ключ сохранен.".to_string())
 }
 
 #[tauri::command]
-fn reset_key(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+fn reset_key(app: AppHandle) -> Result<String, String> {
     reset_provider()?;
-    refresh_tray_toggle(&state);
     let _ = app.emit("zenith-state-changed", ());
     Ok("Настройки восстановлены.".to_string())
 }
@@ -78,7 +84,31 @@ fn launch_saved_codex(app: AppHandle) -> Result<String, String> {
     }
     let message = launch_codex();
     close_main_window(&app);
+    let _ = app.emit("zenith-state-changed", ());
     Ok(message)
+}
+
+#[tauri::command]
+fn open_top_up_url(url: String) -> Result<(), String> {
+    if !url.starts_with(TOP_UP_BOT_URL) {
+        return Err("Unsupported top-up URL.".to_string());
+    }
+    open_external_url(&url)
+}
+
+fn open_external_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let status = Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(url).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = Command::new("xdg-open").arg(url).spawn();
+
+    status.map(|_| ()).map_err(|err| err.to_string())
 }
 
 fn main() {
@@ -92,7 +122,7 @@ fn main() {
         }
     };
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
@@ -129,8 +159,18 @@ fn main() {
             get_system_locale,
             save_key,
             reset_key,
-            launch_saved_codex
+            launch_saved_codex,
+            open_top_up_url
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Zenith Codex");
+        .build(tauri::generate_context!())
+        .expect("failed to build Zenith Codex");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::ExitRequested { api, code, .. } = event {
+            let state = app_handle.state::<AppState>();
+            if code.is_none() && state.should_prevent_exit() {
+                api.prevent_exit();
+            }
+        }
+    });
 }

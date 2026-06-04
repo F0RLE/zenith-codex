@@ -1,26 +1,38 @@
-import { Download, Eye, EyeOff, Play, RefreshCw, RotateCcw, Save } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BarChart3, CreditCard, History, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { HistoryPanel } from "./components/HistoryPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { StatsGrid } from "./components/StatsGrid";
+import { TitleBar } from "./components/TitleBar";
+import { Toolbar } from "./components/Toolbar";
+import { TopUpPanel } from "./components/TopUpPanel";
 import {
+  createTopUpIntent,
   getKeyStats,
+  getKeyUsageHistory,
   getPlatform,
   getState,
   KeyStats,
   launchCodex,
   onStateChanged,
+  openTopUpUrl,
   Platform,
   resetKey,
   saveKey,
   updateAndRelaunch,
+  UsageLogEntry,
   UiState,
 } from "./tauri";
 import "./styles.css";
 
 const initialState: UiState = {
   providerActive: false,
+  codexRunning: false,
   savedApiKey: "",
 };
 const STATS_REFRESH_MS = 60_000;
+type AppTab = "stats" | "history" | "topUp" | "settings";
 
 export function App() {
   const [platform, setPlatform] = useState<Platform>("windows");
@@ -35,6 +47,13 @@ export function App() {
   const [keyStats, setKeyStats] = useState<KeyStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState(false);
+  const [topUpLoading, setTopUpLoading] = useState(false);
+  const [topUpError, setTopUpError] = useState(false);
+  const [activeTab, setActiveTab] = useState<AppTab>("stats");
+  const [history, setHistory] = useState<UsageLogEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [historyCanLoadMore, setHistoryCanLoadMore] = useState(false);
   const updatingRef = useRef(false);
   const startupUpdateCheckedRef = useRef(false);
   const { t } = useTranslation();
@@ -43,9 +62,8 @@ export function App() {
   const canLaunch = state.providerActive && !busy;
   const canUpdate = !busy && !updating;
   const canReset = (state.providerActive || Boolean(state.savedApiKey)) && !busy;
-  const statsKey = (apiKey || state.savedApiKey).trim();
+  const statsKey = state.savedApiKey.trim();
   const hasStatsKey = Boolean(statsKey);
-  const canRefreshStats = hasStatsKey && !statsLoading;
 
   const platformLabel = useMemo(() => {
     if (platform === "macos") return "macOS";
@@ -61,7 +79,7 @@ export function App() {
   }
 
   async function refreshStats(keyOverride?: string) {
-    const key = ((keyOverride ?? apiKey) || state.savedApiKey).trim();
+    const key = (keyOverride ?? state.savedApiKey).trim();
     if (!key) {
       setKeyStats(null);
       return;
@@ -75,6 +93,27 @@ export function App() {
       setStatsError(true);
     } finally {
       setStatsLoading(false);
+    }
+  }
+
+  async function refreshHistory(keyOverride?: string, sinceId?: number) {
+    const key = (keyOverride ?? state.savedApiKey).trim();
+    if (!key) {
+      setHistory([]);
+      setHistoryCanLoadMore(false);
+      return;
+    }
+
+    setHistoryLoading(true);
+    setHistoryError(false);
+    try {
+      const result = await getKeyUsageHistory(key, sinceId);
+      setHistory((current) => (sinceId ? [...current, ...result.usage] : result.usage));
+      setHistoryCanLoadMore(result.usage.length >= result.limit);
+    } catch {
+      setHistoryError(true);
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -115,7 +154,10 @@ export function App() {
   useEffect(() => {
     getPlatform().then(setPlatform).catch(() => setPlatform("windows"));
     refreshState()
-      .then((next) => refreshStats(next.savedApiKey))
+      .then((next) => {
+        refreshStats(next.savedApiKey).catch(() => undefined);
+        refreshHistory(next.savedApiKey).catch(() => undefined);
+      })
       .catch(() => undefined);
     if (!startupUpdateCheckedRef.current) {
       startupUpdateCheckedRef.current = true;
@@ -123,7 +165,10 @@ export function App() {
     }
     const unsubscribe = onStateChanged(() => {
       refreshState()
-        .then((next) => refreshStats(next.savedApiKey))
+        .then((next) => {
+          refreshStats(next.savedApiKey).catch(() => undefined);
+          refreshHistory(next.savedApiKey).catch(() => undefined);
+        })
         .catch(() => undefined);
     });
     return () => {
@@ -135,11 +180,14 @@ export function App() {
     if (!hasStatsKey) {
       setKeyStats(null);
       setStatsError(false);
+      setHistory([]);
+      setHistoryCanLoadMore(false);
       return undefined;
     }
 
     const timer = window.setInterval(() => {
       refreshStats(statsKey).catch(() => undefined);
+      refreshHistory(statsKey).catch(() => undefined);
     }, STATS_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [hasStatsKey, statsKey]);
@@ -155,6 +203,7 @@ export function App() {
       await saveKey(nextKey);
       await refreshState();
       await refreshStats(nextKey);
+      await refreshHistory(nextKey);
       setSaved(true);
     } finally {
       setBusy(false);
@@ -182,117 +231,122 @@ export function App() {
       await resetKey();
       setApiKey("");
       setKeyStats(null);
+      setHistory([]);
+      setHistoryCanLoadMore(false);
       await refreshState();
     } finally {
       setBusy(false);
     }
   }
 
+  async function handleTopUp(amountUsd: number) {
+    const key = statsKey;
+    if (!key) return;
+
+    setTopUpLoading(true);
+    setTopUpError(false);
+    try {
+      const url = await createTopUpIntent(key, Math.round(amountUsd * 100));
+      await openTopUpUrl(url);
+    } catch {
+      setTopUpError(true);
+    } finally {
+      setTopUpLoading(false);
+    }
+  }
+
   return (
     <main className={`app platform-${platform}`} aria-label={t("app.label", { platform: platformLabel })}>
+      <TitleBar platform={platform} />
       <section className="panel">
-        <form className={`toolbar ${updateVisible ? "has-update" : ""}`} onSubmit={handleSave}>
-          <label className="api-field">
-            <span className="sr-only">{t("apiKey.label")}</span>
-            <input
-              value={apiKey}
-              onChange={(event) => {
-                setApiKey(event.target.value);
-                setSaved(false);
-              }}
-              type={keyVisible ? "text" : "password"}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={t("apiKey.label")}
+        <Toolbar
+          apiKey={apiKey}
+          canLaunch={canLaunch}
+          canSave={canSave}
+          codexRunning={state.codexRunning}
+          keyVisible={keyVisible}
+          saved={saved}
+          onApiKeyChange={(value) => {
+            setApiKey(value);
+            setSaved(false);
+          }}
+          onKeyVisibleChange={setKeyVisible}
+          onLaunch={handleLaunch}
+          onSubmit={handleSave}
+        />
+
+        <nav className="tabs" aria-label={t("tabs.label")}>
+          <TabButton
+            active={activeTab === "stats"}
+            icon={<BarChart3 aria-hidden />}
+            label={t("tabs.stats")}
+            onClick={() => setActiveTab("stats")}
+          />
+          <TabButton
+            active={activeTab === "history"}
+            icon={<History aria-hidden />}
+            label={t("tabs.history")}
+            onClick={() => setActiveTab("history")}
+          />
+          <TabButton
+            active={activeTab === "topUp"}
+            icon={<CreditCard aria-hidden />}
+            label={t("tabs.topUp")}
+            onClick={() => setActiveTab("topUp")}
+          />
+          <TabButton
+            active={activeTab === "settings"}
+            icon={<Settings aria-hidden />}
+            label={t("tabs.settings")}
+            onClick={() => setActiveTab("settings")}
+          />
+        </nav>
+
+        <section className="tab-content">
+          {activeTab === "stats" ? <StatsGrid keyStats={keyStats} /> : null}
+          {activeTab === "history" ? (
+            <HistoryPanel
+              entries={history}
+              error={historyError}
+              loading={historyLoading}
+              canLoadMore={historyCanLoadMore}
+              onLoadLatest={() => refreshHistory()}
+              onLoadMore={() => refreshHistory(undefined, history[history.length - 1]?.id)}
             />
-            <button
-              className="icon-button"
-              type="button"
-              title={keyVisible ? t("apiKey.hide") : t("apiKey.show")}
-              aria-label={keyVisible ? t("apiKey.hide") : t("apiKey.show")}
-              onClick={() => setKeyVisible((value) => !value)}
-            >
-              {keyVisible ? <EyeOff aria-hidden /> : <Eye aria-hidden />}
-            </button>
-          </label>
-
-          <button className={`save-button ${saved ? "saved" : ""}`} type="submit" disabled={!canSave}>
-            <Save aria-hidden />
-            <span>{saved ? t("actions.saved") : t("actions.save")}</span>
-          </button>
-
-          <button className="launch-button" type="button" disabled={!canLaunch} onClick={handleLaunch}>
-            <Play aria-hidden />
-            <span>{t("actions.launch")}</span>
-          </button>
-
-          <button className="reset-button" type="button" disabled={!canReset} onClick={handleReset}>
-            <RotateCcw aria-hidden />
-            <span>{t("actions.reset")}</span>
-          </button>
-
-          {updateVisible ? (
-            <button className="update-button" type="button" disabled={!canUpdate} onClick={() => installUpdate(false)}>
-              <Download aria-hidden />
-              <span>{updateLabel ?? t("actions.update")}</span>
-            </button>
           ) : null}
-
-          <button
-            className="refresh-button"
-            type="button"
-            disabled={!canRefreshStats}
-            onClick={() => refreshStats()}
-            title={t("actions.refreshStats")}
-            aria-label={t("actions.refreshStats")}
-          >
-            <RefreshCw aria-hidden />
-          </button>
-        </form>
-
-        <div className="status-row">
-          <span className={`status-dot ${state.providerActive ? "active" : ""}`} />
-          <span>{state.providerActive ? t("status.ready") : t("status.empty")}</span>
-          {keyStats?.maskedKey ? <strong>{keyStats.maskedKey}</strong> : null}
-          {statsLoading ? <span>{t("stats.loading")}</span> : null}
-          {statsError ? <span className="error-text">{t("stats.failed")}</span> : null}
-        </div>
-
-        {hasStatsKey ? (
-          <div className="stats-grid" aria-label={t("stats.label")}>
-            <Stat label={t("stats.balance")} value={formatMoney(keyStats?.balanceCents)} accent />
-            <Stat label={t("stats.spent")} value={formatMoney(keyStats?.spentCents)} />
-            <Stat label={t("stats.requests")} value={formatNumber(keyStats?.requests)} />
-            <Stat label={t("stats.totalTokens")} value={formatNumber(keyStats?.totalTokens)} />
-            <Stat label={t("stats.inputTokens")} value={formatNumber(keyStats?.inputTokens)} />
-            <Stat label={t("stats.cachedTokens")} value={formatNumber(keyStats?.cachedInputTokens)} />
-            <Stat label={t("stats.outputTokens")} value={formatNumber(keyStats?.outputTokens)} />
-            <Stat label={t("stats.month")} value={formatMoney(keyStats?.monthlySpentCents)} />
-          </div>
-        ) : null}
+          {activeTab === "topUp" ? (
+            <TopUpPanel disabled={!hasStatsKey} error={topUpError} loading={topUpLoading} onTopUp={handleTopUp} />
+          ) : null}
+          {activeTab === "settings" ? (
+            <SettingsPanel
+              canReset={canReset}
+              canUpdate={canUpdate}
+              updateLabel={updateLabel}
+              onInstallUpdate={() => installUpdate(false)}
+              onReset={handleReset}
+            />
+          ) : null}
+        </section>
       </section>
     </main>
   );
 }
 
-function Stat({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+function TabButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
   return (
-    <div className={`stat ${accent ? "accent" : ""}`}>
+    <button className={active ? "active" : ""} type="button" onClick={onClick}>
+      {icon}
       <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    </button>
   );
-}
-
-function formatMoney(cents?: number) {
-  if (typeof cents !== "number") return "$0.00";
-  return `$${(cents / 100).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function formatNumber(value?: number) {
-  if (typeof value !== "number") return "0";
-  return value.toLocaleString("en-US");
 }

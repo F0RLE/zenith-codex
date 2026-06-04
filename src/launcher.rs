@@ -41,6 +41,25 @@ pub fn launch_codex() -> String {
     }
 }
 
+pub fn is_codex_running() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return is_windows_process_running("codex.exe")
+            || is_windows_process_running("Codex.exe")
+            || is_windows_process_running("OpenAI.Codex.exe");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return is_unix_process_running("Codex") || is_unix_process_running("codex");
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        return is_unix_process_running("codex") || is_unix_process_running("Codex");
+    }
+}
+
 fn start_detached(path: PathBuf) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -59,6 +78,30 @@ fn start_detached(path: PathBuf) -> Result<(), String> {
         }
         command.spawn().map(|_| ()).map_err(|err| err.to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_process_running(image_name: &str) -> bool {
+    let Ok(output) = Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {image_name}"), "/NH"])
+        .output()
+    else {
+        return false;
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().any(|line| {
+        line.to_ascii_lowercase()
+            .starts_with(&image_name.to_ascii_lowercase())
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_unix_process_running(process_name: &str) -> bool {
+    Command::new("pgrep")
+        .args(["-x", process_name])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]

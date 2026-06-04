@@ -46,15 +46,6 @@ pub fn ensure_provider_on_launch() -> Result<(), String> {
     Ok(())
 }
 
-pub fn disable_provider() -> Result<(), String> {
-    let config_path = default_codex_home().join(CONFIG_FILE);
-    let original = fs::read_to_string(&config_path)
-        .map_err(|err| format!("Не удалось прочитать {}: {err}", config_path.display()))?;
-    backup_config(&config_path, &original)?;
-    let next = remove_zenith_provider(&original);
-    atomic_write(&config_path, &next)
-}
-
 pub fn reset_provider() -> Result<(), String> {
     let codex_home = default_codex_home();
     let config_path = codex_home.join(CONFIG_FILE);
@@ -299,4 +290,67 @@ fn redact_config_secrets(content: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upsert_zenith_provider_replaces_model_provider_and_preserves_other_tables() {
+        let original = r#"
+model_provider = "openai"
+
+[profiles.default]
+model = "gpt-5"
+
+[model_providers.zenith]
+name = "Old"
+base_url = "https://old.example/v1"
+"#;
+
+        let next = upsert_zenith_provider(original);
+
+        assert!(next.contains(r#"model_provider = "codex_local_access""#));
+        assert!(next.contains("[model_providers.codex_local_access]"));
+        assert!(next.contains(r#"base_url = "https://api.zenithmarket.dev/v1""#));
+        assert!(next.contains("[profiles.default]"));
+        assert!(!next.contains("[model_providers.zenith]"));
+        assert!(!next.contains(r#"model_provider = "openai""#));
+    }
+
+    #[test]
+    fn remove_zenith_provider_keeps_unrelated_provider_config() {
+        let original = r#"
+model_provider = "codex_local_access"
+
+[model_providers.codex_local_access]
+name = "Zenith"
+base_url = "https://api.zenithmarket.dev/v1"
+
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+"#;
+
+        let next = remove_zenith_provider(original);
+
+        assert!(next.contains("[model_providers.openai]"));
+        assert!(next.contains(r#"base_url = "https://api.openai.com/v1""#));
+        assert!(!next.contains("[model_providers.codex_local_access]"));
+        assert!(!next.contains(r#"model_provider = "codex_local_access""#));
+    }
+
+    #[test]
+    fn redact_config_secrets_hides_legacy_inline_token() {
+        let original = r#"
+[model_providers.codex_local_access]
+experimental_bearer_token = "znt_secret"
+"#;
+
+        let redacted = redact_config_secrets(original);
+
+        assert!(redacted.contains(r#"experimental_bearer_token = "<redacted>""#));
+        assert!(!redacted.contains("znt_secret"));
+    }
 }

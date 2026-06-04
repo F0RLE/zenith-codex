@@ -1,5 +1,6 @@
 target/
 gen/
+.build/
 windows/
 node_modules/
 ui/dist/

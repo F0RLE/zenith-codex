@@ -16,11 +16,12 @@
         "label": "main",
         "title": "Zenith Codex",
         "width": 900,
-        "height": 260,
+        "height": 340,
         "minWidth": 760,
-        "minHeight": 240,
+        "minHeight": 280,
+        "decorations": false,
         "backgroundColor": "#071018",
-        "resizable": false,
+        "resizable": true,
         "center": true,
         "visible": true
       }
