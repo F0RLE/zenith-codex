@@ -1,0 +1,23 @@
+[package]
+name = "zenith-codex"
+version = "1.0.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+keyring = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sys-locale = "0.3"
+tauri = { version = "2.11.2", features = ["image-png", "tray-icon"] }
+tauri-plugin-process = "2.3.0"
+tauri-plugin-updater = "2.9.0"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+incremental = false

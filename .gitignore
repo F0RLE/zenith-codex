@@ -1,0 +1,13 @@
+target/
+gen/
+windows/
+node_modules/
+ui/dist/
+
+*.pdb
+*.log
+*.tmp
+*.tsbuildinfo
+
+.DS_Store
+Thumbs.db

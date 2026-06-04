@@ -1,0 +1,88 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, nightly]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main, nightly]
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: npm run check
+      - run: cargo test --locked
+
+  build:
+    name: ${{ matrix.name }}
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+          - name: windows-arm64
+            os: windows-11-arm
+          - name: macos-arm64
+            os: macos-latest
+          - name: macos-intel
+            os: macos-15-intel
+          - name: linux-x64
+            os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: "Zenith Codex ${{ github.ref_name }}"
+          releaseBody: "Release build for Zenith Codex."
+          releaseDraft: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          prerelease: ${{ contains(github.ref_name, 'nightly') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+      - name: Collect release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $patterns = @("*.msi", "*.exe", "*.dmg", "*.app.tar.gz", "*.deb", "*.rpm", "*.AppImage", "*.sig", "latest.json")
+          Get-ChildItem -Path target/release/bundle -Recurse -File |
+            Where-Object { $file = $_; $patterns | Where-Object { $file.Name -like $_ } } |
+            Copy-Item -Destination artifacts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zenith-codex-${{ matrix.name }}
+          path: artifacts/*
+          if-no-files-found: error
