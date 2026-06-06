@@ -30,7 +30,7 @@ For `v*` tags it creates a draft GitHub Release and uploads release artifacts fo
 - Linux x64
 - Linux arm64
 
-The app writes the Zenith provider into the local Codex config and uses:
+The app writes the Zenith connection into the local Codex config and uses:
 
 ```text
 https://api.zenithmarket.dev/v1
