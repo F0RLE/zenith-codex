@@ -465,7 +465,7 @@ fn normalize_api_key(api_key: &str) -> Result<String, String> {
 
 async fn api_error_message(response: reqwest::Response, fallback: &str) -> String {
     let status = response.status();
-    let message = match response.json::<Value>().await {
+    let raw_message = match response.json::<Value>().await {
         Ok(payload) => payload
             .get("error")
             .and_then(|error| {
@@ -485,7 +485,36 @@ async fn api_error_message(response: reqwest::Response, fallback: &str) -> Strin
             .unwrap_or_else(|| fallback.to_string()),
         Err(_) => fallback.to_string(),
     };
+    let message = sanitize_api_error_message(&raw_message, fallback);
     format!("{message} ({})", status.as_u16())
+}
+
+fn sanitize_api_error_message(message: &str, fallback: &str) -> String {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return fallback.to_string();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let sensitive_markers = [
+        "http://",
+        "https://",
+        "znt_",
+        "zrk_",
+        "sk-",
+        "bearer ",
+        "authorization",
+        "api key",
+        "token",
+        "zjapi",
+        "provider",
+        "upstream",
+        "cf-ray",
+        "cloudflare",
+    ];
+    if sensitive_markers.iter().any(|marker| lower.contains(marker)) {
+        return fallback.to_string();
+    }
+    trimmed.chars().take(240).collect()
 }
 
 fn key_stats_from_value(data: &Value) -> KeyStats {
@@ -663,7 +692,7 @@ fn extract_top_up_start(data: TopUpIntentData) -> Option<String> {
         .or(data.start_parameter)
         .or(data.start_payload)
         .or(data.code)
-        .filter(|start| !start.trim().is_empty())
+        .filter(|start| is_valid_top_up_start(start))
 }
 
 fn extract_top_up_start_from_url(value: &str) -> Option<String> {
@@ -676,7 +705,8 @@ fn extract_top_up_start_from_url(value: &str) -> Option<String> {
     {
         return input
             .query_pairs()
-            .find_map(|(key, value)| (key == "start").then(|| value.to_string()));
+            .find_map(|(key, value)| (key == "start").then(|| value.to_string()))
+            .filter(|start| is_valid_top_up_start(start));
     }
 
     let base = Url::parse(TOP_UP_BOT_URL).ok()?;
@@ -686,7 +716,8 @@ fn extract_top_up_start_from_url(value: &str) -> Option<String> {
     {
         return input
             .query_pairs()
-            .find_map(|(key, value)| (key == "start").then(|| value.to_string()));
+            .find_map(|(key, value)| (key == "start").then(|| value.to_string()))
+            .filter(|start| is_valid_top_up_start(start));
     }
     None
 }
@@ -699,37 +730,70 @@ fn telegram_start_url(start: &str) -> String {
     url.to_string()
 }
 
+fn is_valid_top_up_start(start: &str) -> bool {
+    let Some(rest) = start.strip_prefix("ztu_") else {
+        return false;
+    };
+    rest.len() == 36 && rest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_top_up_start_from_url, fallback_api_date, format_api_date, is_allowed_top_up_url,
-        telegram_start_url,
+        extract_top_up_start, extract_top_up_start_from_url, fallback_api_date, format_api_date,
+        is_allowed_top_up_url, sanitize_api_error_message, telegram_start_url, TopUpIntentData,
     };
 
     #[test]
     fn top_up_opener_allows_only_telegram_app_deep_link() {
         assert!(is_allowed_top_up_url(
-            "tg://resolve?domain=zenith_service_bot&start=ztu_test"
+            "tg://resolve?domain=zenith_service_bot&start=ztu_0123456789abcdef0123456789abcdef0123"
         ));
         assert!(!is_allowed_top_up_url(
-            "https://t.me/zenith_service_bot?start=ztu_test"
+            "https://t.me/zenith_service_bot?start=ztu_0123456789abcdef0123456789abcdef0123"
         ));
         assert!(!is_allowed_top_up_url(
-            "tg://resolve?domain=other_bot&start=ztu_test"
+            "tg://resolve?domain=other_bot&start=ztu_0123456789abcdef0123456789abcdef0123"
         ));
     }
 
     #[test]
     fn top_up_start_payload_is_converted_to_app_deep_link() {
         assert_eq!(
-            extract_top_up_start_from_url("https://t.me/zenith_service_bot?start=ztu_test")
-                .as_deref(),
-            Some("ztu_test")
+            extract_top_up_start_from_url(
+                "https://t.me/zenith_service_bot?start=ztu_0123456789abcdef0123456789abcdef0123"
+            )
+            .as_deref(),
+            Some("ztu_0123456789abcdef0123456789abcdef0123")
         );
         assert_eq!(
-            telegram_start_url("ztu_test"),
-            "tg://resolve?domain=zenith_service_bot&start=ztu_test"
+            telegram_start_url("ztu_0123456789abcdef0123456789abcdef0123"),
+            "tg://resolve?domain=zenith_service_bot&start=ztu_0123456789abcdef0123456789abcdef0123"
         );
+    }
+
+    #[test]
+    fn top_up_start_payload_rejects_malformed_backend_values() {
+        assert!(extract_top_up_start(TopUpIntentData {
+            code: Some("ztu_0123456789abcdef0123456789abcdef0123".to_string()),
+            start_parameter: None,
+            start_payload: None,
+            bot_url: None,
+            url: None,
+        })
+        .is_some());
+        assert!(extract_top_up_start(TopUpIntentData {
+            code: Some("ztu_short".to_string()),
+            start_parameter: None,
+            start_payload: None,
+            bot_url: None,
+            url: None,
+        })
+        .is_none());
+        assert!(extract_top_up_start_from_url(
+            "https://t.me/zenith_service_bot?start=ztu_0123456789abcdef0123456789abcdef012g"
+        )
+        .is_none());
     }
 
     #[test]
@@ -746,6 +810,21 @@ mod tests {
         assert_eq!(
             fallback_api_date("2026-06-05T12:34:56.789Z"),
             "2026-06-05 12:34"
+        );
+    }
+
+    #[test]
+    fn api_error_sanitizer_hides_backend_and_token_details() {
+        assert_eq!(
+            sanitize_api_error_message(
+                "provider failed at https://zjapi.example/v1 with token sk-secret and cf-ray abc",
+                "Stats request failed."
+            ),
+            "Stats request failed."
+        );
+        assert_eq!(
+            sanitize_api_error_message("Requested model is disabled", "Stats request failed."),
+            "Requested model is disabled"
         );
     }
 }

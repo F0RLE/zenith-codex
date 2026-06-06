@@ -5,7 +5,7 @@ Desktop app for connecting Codex to Zenith API.
 ## What It Does
 
 - Saves your Zenith API key.
-- Writes the Zenith provider into Codex config.
+- Writes the Zenith connection into Codex config.
 - Launches Codex from the app.
 - Shows key balance, spending, requests, and token usage.
 - Opens the Telegram bot for balance top-ups.

@@ -15,6 +15,7 @@ export function StatsGrid({ keyStats }: StatsGridProps) {
       <Stat label={t("stats.requests")} value={keyStats?.requestsDisplay ?? "0"} />
       <Stat label={t("stats.totalTokens")} value={keyStats?.totalTokensDisplay ?? "0"} />
       <Stat label={t("stats.inputTokens")} value={keyStats?.inputTokensDisplay ?? "0"} />
+      <Stat label={t("stats.reasoningTokens")} value={keyStats?.reasoningTokensDisplay ?? "0"} />
       <Stat label={t("stats.outputTokens")} value={keyStats?.outputTokensDisplay ?? "0"} />
       <Stat label={t("stats.cachedTokens")} value={keyStats?.cachedInputTokensDisplay ?? "0"} />
       <Stat label={t("stats.month")} value={keyStats?.monthlySpent ?? "$0.00"} />
