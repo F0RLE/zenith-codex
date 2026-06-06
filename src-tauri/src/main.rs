@@ -319,7 +319,8 @@ fn start_key_stats_watcher(app: AppHandle) {
 
             if let Some(previous) = previous {
                 if version.version != previous {
-                    if let Ok(page) = fetch_key_usage_history(&api_key, None, Some(previous)).await {
+                    if let Ok(page) = fetch_key_usage_history(&api_key, None, Some(previous)).await
+                    {
                         let _ = app.emit("zenith-usage-history-changed", page);
                     }
                 }
@@ -505,13 +506,15 @@ fn sanitize_api_error_message(message: &str, fallback: &str) -> String {
         "authorization",
         "api key",
         "token",
-        "zjapi",
         "provider",
         "upstream",
         "cf-ray",
         "cloudflare",
     ];
-    if sensitive_markers.iter().any(|marker| lower.contains(marker)) {
+    if sensitive_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
         return fallback.to_string();
     }
     trimmed.chars().take(240).collect()
@@ -530,7 +533,10 @@ fn key_stats_from_value(data: &Value) -> KeyStats {
             .map(str::to_string),
         enabled,
         status: string_field(data, &["status"]),
-        balance_cents: int_field(data, &["balanceCents", "remainingCents", "limit_remaining_cents"]),
+        balance_cents: int_field(
+            data,
+            &["balanceCents", "remainingCents", "limit_remaining_cents"],
+        ),
         spent_cents: int_field(data, &["spentCents", "usage_cents"]),
         total_credits_cents: int_field(data, &["totalCreditsCents", "limit_cents"]),
         requests: int_field(data, &["requests"]),
@@ -635,7 +641,10 @@ fn format_number(value: i64) -> String {
 
 fn format_api_date(value: &str) -> String {
     match DateTime::parse_from_rfc3339(value) {
-        Ok(date) => date.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
+        Ok(date) => date
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
         Err(_) => fallback_api_date(value),
     }
 }
@@ -685,14 +694,21 @@ fn string_field(data: &Value, keys: &[&str]) -> String {
 }
 
 fn extract_top_up_start(data: TopUpIntentData) -> Option<String> {
-    data.bot_url
+    let TopUpIntentData {
+        bot_url,
+        url,
+        start_parameter,
+        start_payload,
+        code,
+    } = data;
+
+    bot_url
         .as_deref()
         .and_then(extract_top_up_start_from_url)
-        .or_else(|| data.url.as_deref().and_then(extract_top_up_start_from_url))
-        .or(data.start_parameter)
-        .or(data.start_payload)
-        .or(data.code)
-        .filter(|start| is_valid_top_up_start(start))
+        .or_else(|| url.as_deref().and_then(extract_top_up_start_from_url))
+        .or_else(|| start_parameter.filter(|start| is_valid_top_up_start(start)))
+        .or_else(|| start_payload.filter(|start| is_valid_top_up_start(start)))
+        .or_else(|| code.filter(|start| is_valid_top_up_start(start)))
 }
 
 fn extract_top_up_start_from_url(value: &str) -> Option<String> {
@@ -734,7 +750,10 @@ fn is_valid_top_up_start(start: &str) -> bool {
     let Some(rest) = start.strip_prefix("ztu_") else {
         return false;
     };
-    rest.len() == 36 && rest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    rest.len() == 36
+        && rest
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[cfg(test)]
@@ -790,6 +809,25 @@ mod tests {
             url: None,
         })
         .is_none());
+        assert_eq!(
+            extract_top_up_start(TopUpIntentData {
+                code: Some("ztu_0123456789abcdef0123456789abcdef0123".to_string()),
+                start_parameter: Some("ztu_short".to_string()),
+                start_payload: None,
+                bot_url: None,
+                url: None,
+            })
+            .as_deref(),
+            Some("ztu_0123456789abcdef0123456789abcdef0123")
+        );
+        assert!(extract_top_up_start(TopUpIntentData {
+            code: None,
+            start_parameter: Some("ztu_0123456789ABCDEF0123456789ABCDEF0123".to_string()),
+            start_payload: None,
+            bot_url: None,
+            url: None,
+        })
+        .is_none());
         assert!(extract_top_up_start_from_url(
             "https://t.me/zenith_service_bot?start=ztu_0123456789abcdef0123456789abcdef012g"
         )
@@ -817,7 +855,7 @@ mod tests {
     fn api_error_sanitizer_hides_backend_and_token_details() {
         assert_eq!(
             sanitize_api_error_message(
-                "provider failed at https://zjapi.example/v1 with token sk-secret and cf-ray abc",
+                "provider failed at https://upstream.example/v1 with token sk-secret and cf-ray abc",
                 "Stats request failed."
             ),
             "Stats request failed."
