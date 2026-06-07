@@ -136,8 +136,8 @@ export function App() {
       if (!automatic) setBusy(true);
       try {
         await updateAndRelaunch(() => undefined);
-      } catch (err) {
-        console.error("Update failed:", err);
+      } catch {
+        // Update checks run silently; avoid exposing updater internals in the UI console.
       } finally {
         updatingRef.current = false;
         setUpdating(false);
