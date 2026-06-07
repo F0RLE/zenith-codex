@@ -35,7 +35,7 @@ Updates are served from the latest GitHub Release through `latest.json`. Tauri s
 
 See [UPDATES.md](UPDATES.md) for detailed information about the update system and troubleshooting.
 
-For `v*` tags it creates a draft GitHub Release and uploads release artifacts for:
+For `v*` tags it creates or updates the public GitHub Release and uploads release artifacts for:
 
 - Windows x64
 - Windows arm64

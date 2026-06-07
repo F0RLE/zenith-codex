@@ -85,6 +85,5 @@ tauri signer generate -w ~/.tauri/zenith-codex.key
 3. ✅ Wait for CI to pass
 4. ✅ Merge PR
 5. ✅ Create and push `v*` tag on `main`
-6. ✅ GitHub Actions builds and creates Release
-7. ✅ Publish the draft Release
-8. ✅ Users receive automatic updates on next startup
+6. ✅ GitHub Actions builds, creates or updates the public Release, and uploads signed artifacts
+7. ✅ Users receive automatic updates on next startup
