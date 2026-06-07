@@ -511,13 +511,44 @@ fn sanitize_api_error_message(message: &str, fallback: &str) -> String {
         "cf-ray",
         "cloudflare",
     ];
-    if sensitive_markers
-        .iter()
-        .any(|marker| lower.contains(marker))
+    if sensitive_markers.iter().any(|marker| lower.contains(marker))
+        && !contains_only_safe_public_support_links(trimmed)
     {
         return fallback.to_string();
     }
     trimmed.chars().take(240).collect()
+}
+
+fn contains_only_safe_public_support_links(message: &str) -> bool {
+    for word in message.split_whitespace() {
+        let candidate = word.trim_matches(|character: char| {
+            matches!(character, '.' | ',' | ';' | ':' | ')' | ']' | '}')
+        });
+        if candidate.starts_with("http://")
+            || candidate.starts_with("https://")
+            || candidate.starts_with("tg://")
+        {
+            if !is_safe_public_support_link(candidate) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn is_safe_public_support_link(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() == "https" && url.host_str() == Some("t.me") {
+        return url.path() == "/zenith_service_bot";
+    }
+    if url.scheme() == "tg" && url.host_str() == Some("resolve") {
+        return url
+            .query_pairs()
+            .any(|(key, value)| key == "domain" && value == TOP_UP_BOT_DOMAIN);
+    }
+    false
 }
 
 fn key_stats_from_value(data: &Value) -> KeyStats {
@@ -863,6 +894,13 @@ mod tests {
         assert_eq!(
             sanitize_api_error_message("Requested model is disabled", "Stats request failed."),
             "Requested model is disabled"
+        );
+        assert_eq!(
+            sanitize_api_error_message(
+                "Insufficient Zenith balance. Top up your Zenith API balance in the bot: https://t.me/zenith_service_bot",
+                "Stats request failed."
+            ),
+            "Insufficient Zenith balance. Top up your Zenith API balance in the bot: https://t.me/zenith_service_bot"
         );
     }
 }
