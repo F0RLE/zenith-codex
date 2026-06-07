@@ -359,7 +359,7 @@ base_url = "https://gateway.example/v1"
     }
 
     #[test]
-    fn redact_config_secrets_hides_legacy_inline_token() {
+    fn redact_config_secrets_hides_inline_tokens() {
         let original = r#"
 [model_providers.codex_local_access]
 experimental_bearer_token = "znt_secret"
