@@ -71,8 +71,14 @@ struct KeyStats {
     output_tokens: i64,
     total_tokens: i64,
     daily_spent_cents: i64,
+    #[serde(default)]
+    daily_spent_microusd: Option<i64>,
     weekly_spent_cents: i64,
+    #[serde(default)]
+    weekly_spent_microusd: Option<i64>,
     monthly_spent_cents: i64,
+    #[serde(default)]
+    monthly_spent_microusd: Option<i64>,
     #[serde(default)]
     balance: String,
     #[serde(default)]
@@ -592,8 +598,11 @@ fn key_stats_from_value(data: &Value) -> KeyStats {
         output_tokens: int_field(data, &["outputTokens", "output_tokens"]),
         total_tokens: int_field(data, &["totalTokens", "total_tokens"]),
         daily_spent_cents: int_field(data, &["dailySpentCents", "usage_daily_cents"]),
+        daily_spent_microusd: optional_int_field(data, &["dailySpentMicrousd", "usageDailyMicrousd"]),
         weekly_spent_cents: int_field(data, &["weeklySpentCents", "usage_weekly_cents"]),
+        weekly_spent_microusd: optional_int_field(data, &["weeklySpentMicrousd", "usageWeeklyMicrousd"]),
         monthly_spent_cents: int_field(data, &["monthlySpentCents", "usage_monthly_cents"]),
+        monthly_spent_microusd: optional_int_field(data, &["monthlySpentMicrousd", "usageMonthlyMicrousd"]),
         balance: string_field(data, &["balance"]),
         spent: string_field(data, &["spent"]),
         total_credits: string_field(data, &["totalCredits"]),
@@ -650,13 +659,22 @@ fn enrich_key_stats(stats: &mut KeyStats) {
         stats.total_tokens_display = format_number(stats.total_tokens);
     }
     if stats.daily_spent.is_empty() {
-        stats.daily_spent = format_money(stats.daily_spent_cents);
+        stats.daily_spent = stats
+            .daily_spent_microusd
+            .map(format_money_microusd)
+            .unwrap_or_else(|| format_money(stats.daily_spent_cents));
     }
     if stats.weekly_spent.is_empty() {
-        stats.weekly_spent = format_money(stats.weekly_spent_cents);
+        stats.weekly_spent = stats
+            .weekly_spent_microusd
+            .map(format_money_microusd)
+            .unwrap_or_else(|| format_money(stats.weekly_spent_cents));
     }
     if stats.monthly_spent.is_empty() {
-        stats.monthly_spent = format_money(stats.monthly_spent_cents);
+        stats.monthly_spent = stats
+            .monthly_spent_microusd
+            .map(format_money_microusd)
+            .unwrap_or_else(|| format_money(stats.monthly_spent_cents));
     }
 }
 
@@ -949,7 +967,9 @@ mod tests {
             "spentCents": 31,
             "spentMicrousd": 298855,
             "totalCreditsCents": 10000,
-            "totalCreditsMicrousd": 100000000
+            "totalCreditsMicrousd": 100000000,
+            "monthlySpentCents": 31,
+            "monthlySpentMicrousd": 298855
         }));
 
         super::enrich_key_stats(&mut stats);
@@ -957,6 +977,7 @@ mod tests {
         assert_eq!(stats.balance, "$99.701145");
         assert_eq!(stats.spent, "$0.298855");
         assert_eq!(stats.total_credits, "$100.000000");
+        assert_eq!(stats.monthly_spent, "$0.298855");
     }
 
     #[test]

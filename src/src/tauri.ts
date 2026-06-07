@@ -30,8 +30,11 @@ export type KeyStats = {
   outputTokens: number;
   totalTokens: number;
   dailySpentCents: number;
+  dailySpentMicrousd?: number | null;
   weeklySpentCents: number;
+  weeklySpentMicrousd?: number | null;
   monthlySpentCents: number;
+  monthlySpentMicrousd?: number | null;
   balance: string;
   spent: string;
   totalCredits: string;
