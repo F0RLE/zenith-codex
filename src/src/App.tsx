@@ -135,11 +135,7 @@ export function App() {
       setUpdating(true);
       if (!automatic) setBusy(true);
       try {
-        const result = await updateAndRelaunch(() => undefined);
-        if (result === "none" && !automatic) {
-          // No update available when manually triggered
-          console.log("No updates available");
-        }
+        await updateAndRelaunch(() => undefined);
       } catch (err) {
         console.error("Update failed:", err);
       } finally {
