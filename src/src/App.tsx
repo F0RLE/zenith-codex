@@ -61,7 +61,6 @@ export function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(false);
   const [historyCanLoadMore, setHistoryCanLoadMore] = useState(false);
-  const [historyPageLimit, setHistoryPageLimit] = useState(0);
   const updatingRef = useRef(false);
   const startupUpdateCheckedRef = useRef(false);
   const usageVersionRef = useRef<number | null>(null);
@@ -108,7 +107,6 @@ export function App() {
       setHistory([]);
       usageVersionRef.current = null;
       setHistoryCanLoadMore(false);
-      setHistoryPageLimit(0);
       setHistoryError(false);
       return;
     }
@@ -118,7 +116,6 @@ export function App() {
     try {
       const result = await getKeyUsageHistory(key, sinceId);
       setHistory((current) => (sinceId ? [...current, ...result.usage] : result.usage));
-      setHistoryPageLimit(result.limit);
       if (!sinceId) {
         usageVersionRef.current = result.usage[0]?.id ?? null;
       }
@@ -179,7 +176,6 @@ export function App() {
     const unsubscribeHistory = onUsageHistoryChanged((result) => {
       setHistoryError(false);
       if (result.usage.length === 0) return;
-      setHistoryPageLimit(result.limit);
       setHistory((current) => {
         const seen = new Set(current.map((entry) => entry.id));
         const next = [...result.usage.filter((entry) => !seen.has(entry.id)), ...current];
@@ -213,7 +209,6 @@ export function App() {
       setHistory([]);
       usageVersionRef.current = null;
       setHistoryCanLoadMore(false);
-      setHistoryPageLimit(0);
       return undefined;
     }
     return undefined;
@@ -260,6 +255,7 @@ export function App() {
       setKeyStats(null);
       setHistory([]);
       setHistoryCanLoadMore(false);
+      usageVersionRef.current = null;
       await refreshState();
     } finally {
       setBusy(false);
@@ -344,7 +340,7 @@ export function App() {
               entries={history}
               error={historyError}
               loading={historyLoading}
-              canLoadMore={historyCanLoadMore || (historyPageLimit > 0 && history.length >= historyPageLimit)}
+              canLoadMore={historyCanLoadMore}
               onLoadLatest={() => refreshHistory()}
               onLoadMore={() => refreshHistory(undefined, history[history.length - 1]?.id)}
             />
