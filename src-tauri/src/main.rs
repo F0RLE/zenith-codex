@@ -496,9 +496,7 @@ fn sanitize_api_error_message(message: &str, fallback: &str) -> String {
         return fallback.to_string();
     }
     let lower = trimmed.to_ascii_lowercase();
-    let sensitive_markers = [
-        "http://",
-        "https://",
+    let sensitive_non_url_markers = [
         "znt_",
         "zrk_",
         "sk-",
@@ -511,7 +509,14 @@ fn sanitize_api_error_message(message: &str, fallback: &str) -> String {
         "cf-ray",
         "cloudflare",
     ];
-    if sensitive_markers.iter().any(|marker| lower.contains(marker))
+    if sensitive_non_url_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return fallback.to_string();
+    }
+    let url_markers = ["http://", "https://", "tg://"];
+    if url_markers.iter().any(|marker| lower.contains(marker))
         && !contains_only_safe_public_support_links(trimmed)
     {
         return fallback.to_string();
@@ -901,6 +906,20 @@ mod tests {
                 "Stats request failed."
             ),
             "Insufficient Zenith balance. Top up your Zenith API balance in the bot: https://t.me/zenith_service_bot"
+        );
+        assert_eq!(
+            sanitize_api_error_message(
+                "upstream token failed; contact https://t.me/zenith_service_bot",
+                "Stats request failed."
+            ),
+            "Stats request failed."
+        );
+        assert_eq!(
+            sanitize_api_error_message(
+                "Insufficient Zenith balance. Top up at https://evil.example",
+                "Stats request failed."
+            ),
+            "Stats request failed."
         );
     }
 }
