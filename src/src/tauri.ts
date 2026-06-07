@@ -53,6 +53,7 @@ export type UsageLogEntry = {
   outputTokens: number;
   totalTokens: number;
   costCents: number;
+  costMicrousd?: number | null;
   status: string;
   createdAt: string;
   modelDisplay: string;

@@ -105,6 +105,8 @@ struct UsageLogEntry {
     output_tokens: i64,
     total_tokens: i64,
     cost_cents: i64,
+    #[serde(default)]
+    cost_microusd: Option<i64>,
     status: String,
     created_at: String,
     #[serde(default)]
@@ -647,7 +649,10 @@ fn enrich_usage_log_entry(entry: &mut UsageLogEntry) {
         .filter(|model| !model.trim().is_empty())
         .unwrap_or_else(|| "Unknown model".to_string());
     entry.created_at_display = format_api_date(&entry.created_at);
-    entry.cost = format_money(entry.cost_cents);
+    entry.cost = entry
+        .cost_microusd
+        .map(format_money_microusd)
+        .unwrap_or_else(|| format_money(entry.cost_cents));
     entry.input_tokens_display = format_number(entry.input_tokens);
     entry.cached_input_tokens_display = format_number(entry.cached_input_tokens);
     entry.reasoning_tokens_display = format_number(entry.reasoning_tokens);
@@ -659,6 +664,12 @@ fn format_money(cents: i64) -> String {
     let sign = if cents < 0 { "-" } else { "" };
     let abs = cents.abs();
     format!("{sign}${}.{:02}", format_number(abs / 100), abs % 100)
+}
+
+fn format_money_microusd(microusd: i64) -> String {
+    let sign = if microusd < 0 { "-" } else { "" };
+    let abs = microusd.abs();
+    format!("{sign}${}.{:06}", format_number(abs / 1_000_000), abs % 1_000_000)
 }
 
 fn format_number(value: i64) -> String {
@@ -805,7 +816,7 @@ fn is_valid_top_up_start(start: &str) -> bool {
 mod tests {
     use super::{
         extract_top_up_start, extract_top_up_start_from_url, fallback_api_date, format_api_date,
-        is_allowed_top_up_url, sanitize_api_error_message, telegram_start_url,
+        format_money_microusd, is_allowed_top_up_url, sanitize_api_error_message, telegram_start_url,
         validate_top_up_amount_cents, TopUpIntentData, MAX_TOP_UP_AMOUNT_CENTS,
     };
 
@@ -895,6 +906,12 @@ mod tests {
             fallback_api_date("2026-06-05T12:34:56.789Z"),
             "2026-06-05 12:34"
         );
+    }
+
+    #[test]
+    fn usage_history_cost_uses_micro_usd_precision() {
+        assert_eq!(format_money_microusd(77_592), "$0.077592");
+        assert_eq!(format_money_microusd(1_234_567), "$1.234567");
     }
 
     #[test]
