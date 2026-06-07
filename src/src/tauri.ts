@@ -18,8 +18,11 @@ export type KeyStats = {
   enabled: boolean;
   status: string;
   balanceCents: number;
+  balanceMicrousd?: number | null;
   spentCents: number;
+  spentMicrousd?: number | null;
   totalCreditsCents: number;
+  totalCreditsMicrousd?: number | null;
   requests: number;
   inputTokens: number;
   cachedInputTokens: number;

@@ -56,8 +56,14 @@ struct KeyStats {
     enabled: bool,
     status: String,
     balance_cents: i64,
+    #[serde(default)]
+    balance_microusd: Option<i64>,
     spent_cents: i64,
+    #[serde(default)]
+    spent_microusd: Option<i64>,
     total_credits_cents: i64,
+    #[serde(default)]
+    total_credits_microusd: Option<i64>,
     requests: i64,
     input_tokens: i64,
     cached_input_tokens: i64,
@@ -574,8 +580,11 @@ fn key_stats_from_value(data: &Value) -> KeyStats {
             data,
             &["balanceCents", "remainingCents", "limit_remaining_cents"],
         ),
+        balance_microusd: optional_int_field(data, &["balanceMicrousd", "remainingMicrousd"]),
         spent_cents: int_field(data, &["spentCents", "usage_cents"]),
+        spent_microusd: optional_int_field(data, &["spentMicrousd", "usageMicrousd"]),
         total_credits_cents: int_field(data, &["totalCreditsCents", "limit_cents"]),
+        total_credits_microusd: optional_int_field(data, &["totalCreditsMicrousd"]),
         requests: int_field(data, &["requests"]),
         input_tokens: int_field(data, &["inputTokens", "input_tokens"]),
         cached_input_tokens: int_field(data, &["cachedInputTokens", "cached_input_tokens"]),
@@ -605,13 +614,22 @@ fn enrich_key_stats(stats: &mut KeyStats) {
         stats.status = if stats.enabled { "active" } else { "disabled" }.to_string();
     }
     if stats.balance.is_empty() {
-        stats.balance = format_money(stats.balance_cents);
+        stats.balance = stats
+            .balance_microusd
+            .map(format_money_microusd)
+            .unwrap_or_else(|| format_money(stats.balance_cents));
     }
     if stats.spent.is_empty() {
-        stats.spent = format_money(stats.spent_cents);
+        stats.spent = stats
+            .spent_microusd
+            .map(format_money_microusd)
+            .unwrap_or_else(|| format_money(stats.spent_cents));
     }
     if stats.total_credits.is_empty() {
-        stats.total_credits = format_money(stats.total_credits_cents);
+        stats.total_credits = stats
+            .total_credits_microusd
+            .map(format_money_microusd)
+            .unwrap_or_else(|| format_money(stats.total_credits_cents));
     }
     if stats.requests_display.is_empty() {
         stats.requests_display = format_number(stats.requests);
@@ -742,6 +760,11 @@ fn int_field(data: &Value, keys: &[&str]) -> i64 {
         .unwrap_or_default()
 }
 
+fn optional_int_field(data: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| data.get(key).and_then(Value::as_i64))
+}
+
 fn string_field(data: &Value, keys: &[&str]) -> String {
     keys.iter()
         .find_map(|key| data.get(key).and_then(Value::as_str))
@@ -816,9 +839,11 @@ fn is_valid_top_up_start(start: &str) -> bool {
 mod tests {
     use super::{
         extract_top_up_start, extract_top_up_start_from_url, fallback_api_date, format_api_date,
-        format_money_microusd, is_allowed_top_up_url, sanitize_api_error_message, telegram_start_url,
-        validate_top_up_amount_cents, TopUpIntentData, MAX_TOP_UP_AMOUNT_CENTS,
+        format_money_microusd, is_allowed_top_up_url, key_stats_from_value,
+        sanitize_api_error_message, telegram_start_url, validate_top_up_amount_cents,
+        TopUpIntentData, MAX_TOP_UP_AMOUNT_CENTS,
     };
+    use serde_json::json;
 
     #[test]
     fn top_up_opener_allows_only_telegram_app_deep_link() {
@@ -912,6 +937,26 @@ mod tests {
     fn usage_history_cost_uses_micro_usd_precision() {
         assert_eq!(format_money_microusd(77_592), "$0.077592");
         assert_eq!(format_money_microusd(1_234_567), "$1.234567");
+    }
+
+    #[test]
+    fn key_stats_fallback_uses_micro_usd_precision() {
+        let mut stats = key_stats_from_value(&json!({
+            "maskedKey": "znt_aa...bbbb",
+            "enabled": true,
+            "balanceCents": 9969,
+            "balanceMicrousd": 99701145,
+            "spentCents": 31,
+            "spentMicrousd": 298855,
+            "totalCreditsCents": 10000,
+            "totalCreditsMicrousd": 100000000
+        }));
+
+        super::enrich_key_stats(&mut stats);
+
+        assert_eq!(stats.balance, "$99.701145");
+        assert_eq!(stats.spent, "$0.298855");
+        assert_eq!(stats.total_credits, "$100.000000");
     }
 
     #[test]
