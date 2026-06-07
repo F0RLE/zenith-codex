@@ -36,6 +36,7 @@ const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:47831";
 const DEFAULT_API_BASE_URL: &str = "https://api.zenithmarket.dev/v1";
 const TOP_UP_BOT_URL: &str = "https://t.me/zenith_service_bot";
 const TOP_UP_BOT_DOMAIN: &str = "zenith_service_bot";
+const MAX_TOP_UP_AMOUNT_CENTS: i64 = 1_000_000;
 const USAGE_HISTORY_LIMIT: u8 = 8;
 const STATS_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -352,9 +353,7 @@ async fn create_top_up_intent_and_open(
     app: AppHandle,
 ) -> Result<(), String> {
     let api_key = normalize_api_key(&api_key)?;
-    if amount_cents <= 0 {
-        return Err("Top-up amount must be positive.".to_string());
-    }
+    validate_top_up_amount_cents(amount_cents)?;
 
     let client = reqwest::Client::new();
     let response = client
@@ -709,6 +708,16 @@ fn parse_usd_amount(value: &str) -> Option<f64> {
     Some((amount * 100.0).round() / 100.0)
 }
 
+fn validate_top_up_amount_cents(amount_cents: i64) -> Result<(), String> {
+    if amount_cents <= 0 {
+        return Err("Top-up amount must be positive.".to_string());
+    }
+    if amount_cents > MAX_TOP_UP_AMOUNT_CENTS {
+        return Err("Top-up amount is too large.".to_string());
+    }
+    Ok(())
+}
+
 fn looks_like_grouped_decimal(value: &str) -> bool {
     value
         .split_once(',')
@@ -796,7 +805,8 @@ fn is_valid_top_up_start(start: &str) -> bool {
 mod tests {
     use super::{
         extract_top_up_start, extract_top_up_start_from_url, fallback_api_date, format_api_date,
-        is_allowed_top_up_url, sanitize_api_error_message, telegram_start_url, TopUpIntentData,
+        is_allowed_top_up_url, sanitize_api_error_message, telegram_start_url,
+        validate_top_up_amount_cents, TopUpIntentData, MAX_TOP_UP_AMOUNT_CENTS,
     };
 
     #[test]
@@ -885,6 +895,14 @@ mod tests {
             fallback_api_date("2026-06-05T12:34:56.789Z"),
             "2026-06-05 12:34"
         );
+    }
+
+    #[test]
+    fn top_up_amount_validation_rejects_invalid_ipc_amounts() {
+        assert!(validate_top_up_amount_cents(100).is_ok());
+        assert!(validate_top_up_amount_cents(MAX_TOP_UP_AMOUNT_CENTS).is_ok());
+        assert!(validate_top_up_amount_cents(0).is_err());
+        assert!(validate_top_up_amount_cents(MAX_TOP_UP_AMOUNT_CENTS + 1).is_err());
     }
 
     #[test]
