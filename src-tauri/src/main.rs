@@ -206,23 +206,12 @@ async fn get_key_stats(api_key: String) -> Result<KeyStats, String> {
 
 async fn fetch_key_stats(api_key: &str) -> Result<KeyStats, String> {
     let client = reqwest::Client::new();
-    let primary = api_get(&client, "/zenith/key/stats", api_key).await?;
-    if primary.status().is_success() {
-        let payload = primary
-            .json::<ApiEnvelope<Value>>()
-            .await
-            .map_err(|err| format!("Stats response is invalid: {err}"))?;
-        let mut stats = key_stats_from_value(&payload.data);
-        enrich_key_stats(&mut stats);
-        return Ok(stats);
+    let response = api_get(&client, "/zenith/key/stats", api_key).await?;
+    if !response.status().is_success() {
+        return Err(api_error_message(response, "Stats request failed.").await);
     }
 
-    let fallback = api_get(&client, "/key", api_key).await?;
-    if !fallback.status().is_success() {
-        return Err(api_error_message(fallback, "Stats request failed.").await);
-    }
-
-    let payload = fallback
+    let payload = response
         .json::<ApiEnvelope<Value>>()
         .await
         .map_err(|err| format!("Stats response is invalid: {err}"))?;
@@ -582,27 +571,24 @@ fn key_stats_from_value(data: &Value) -> KeyStats {
             .map(str::to_string),
         enabled,
         status: string_field(data, &["status"]),
-        balance_cents: int_field(
-            data,
-            &["balanceCents", "remainingCents", "limit_remaining_cents"],
-        ),
-        balance_microusd: optional_int_field(data, &["balanceMicrousd", "remainingMicrousd"]),
-        spent_cents: int_field(data, &["spentCents", "usage_cents"]),
-        spent_microusd: optional_int_field(data, &["spentMicrousd", "usageMicrousd"]),
-        total_credits_cents: int_field(data, &["totalCreditsCents", "limit_cents"]),
+        balance_cents: int_field(data, &["balanceCents"]),
+        balance_microusd: optional_int_field(data, &["balanceMicrousd"]),
+        spent_cents: int_field(data, &["spentCents"]),
+        spent_microusd: optional_int_field(data, &["spentMicrousd"]),
+        total_credits_cents: int_field(data, &["totalCreditsCents"]),
         total_credits_microusd: optional_int_field(data, &["totalCreditsMicrousd"]),
         requests: int_field(data, &["requests"]),
-        input_tokens: int_field(data, &["inputTokens", "input_tokens"]),
-        cached_input_tokens: int_field(data, &["cachedInputTokens", "cached_input_tokens"]),
-        reasoning_tokens: int_field(data, &["reasoningTokens", "reasoning_tokens"]),
-        output_tokens: int_field(data, &["outputTokens", "output_tokens"]),
-        total_tokens: int_field(data, &["totalTokens", "total_tokens"]),
-        daily_spent_cents: int_field(data, &["dailySpentCents", "usage_daily_cents"]),
-        daily_spent_microusd: optional_int_field(data, &["dailySpentMicrousd", "usageDailyMicrousd"]),
-        weekly_spent_cents: int_field(data, &["weeklySpentCents", "usage_weekly_cents"]),
-        weekly_spent_microusd: optional_int_field(data, &["weeklySpentMicrousd", "usageWeeklyMicrousd"]),
-        monthly_spent_cents: int_field(data, &["monthlySpentCents", "usage_monthly_cents"]),
-        monthly_spent_microusd: optional_int_field(data, &["monthlySpentMicrousd", "usageMonthlyMicrousd"]),
+        input_tokens: int_field(data, &["inputTokens"]),
+        cached_input_tokens: int_field(data, &["cachedInputTokens"]),
+        reasoning_tokens: int_field(data, &["reasoningTokens"]),
+        output_tokens: int_field(data, &["outputTokens"]),
+        total_tokens: int_field(data, &["totalTokens"]),
+        daily_spent_cents: int_field(data, &["dailySpentCents"]),
+        daily_spent_microusd: optional_int_field(data, &["dailySpentMicrousd"]),
+        weekly_spent_cents: int_field(data, &["weeklySpentCents"]),
+        weekly_spent_microusd: optional_int_field(data, &["weeklySpentMicrousd"]),
+        monthly_spent_cents: int_field(data, &["monthlySpentCents"]),
+        monthly_spent_microusd: optional_int_field(data, &["monthlySpentMicrousd"]),
         balance: string_field(data, &["balance"]),
         spent: string_field(data, &["spent"]),
         total_credits: string_field(data, &["totalCredits"]),
@@ -705,7 +691,11 @@ fn format_money(cents: i64) -> String {
 fn format_money_microusd(microusd: i64) -> String {
     let sign = if microusd < 0 { "-" } else { "" };
     let abs = microusd.abs();
-    format!("{sign}${}.{:06}", format_number(abs / 1_000_000), abs % 1_000_000)
+    format!(
+        "{sign}${}.{:06}",
+        format_number(abs / 1_000_000),
+        abs % 1_000_000
+    )
 }
 
 fn format_number(value: i64) -> String {
@@ -958,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn key_stats_fallback_uses_micro_usd_precision() {
+    fn key_stats_uses_micro_usd_precision() {
         let mut stats = key_stats_from_value(&json!({
             "maskedKey": "znt_aa...bbbb",
             "enabled": true,
