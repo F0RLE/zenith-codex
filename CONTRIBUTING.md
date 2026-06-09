@@ -4,20 +4,15 @@ Zenith Codex is the public desktop app for configuring Codex to use Zenith.
 
 ## Branches
 
-- `nightly` is the default development branch.
-- `main` is the stable release branch.
-- Open normal pull requests into `nightly`.
-- Promote `nightly` into `main` only through a pull request after CI is green.
+- `main` is the primary branch for both development and stable releases.
+- Open pull requests into `main` from feature branches.
+- Tag stable releases directly from `main` after merge and green CI.
 
 ## Pull Request Flow
 
 ```text
-feature/<name> -> PR into nightly
-nightly -> PR into main
-main -> vX.Y.Z tag -> GitHub Release
+feature/<name> -> PR into main -> CI -> merge -> vX.Y.Z tag -> GitHub Release
 ```
-
-Do not push product changes directly to `main`.
 
 ## Local Checks
 
