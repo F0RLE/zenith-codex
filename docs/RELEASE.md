@@ -6,7 +6,7 @@ Patch release for the current Zenith desktop build.
 
 Changes:
 
-- Promotes the current nightly desktop app state to the stable `main` release line.
+- Promotes the current desktop app state to the stable `main` release line.
 - Keeps the current Zenith API contract, billing precision, sanitized API errors, and request history fixes from `v1.0.2`.
 - Aligns the frontend package, Tauri config, Cargo package, and lockfile version to `1.0.3`.
 
@@ -46,9 +46,8 @@ GitHub default branch: `main`.
 
 Use this flow:
 
-1. Open development pull requests into `nightly`.
-2. Promote `nightly` into `main` through a pull request after CI is green.
-3. Create a tag on the `main` commit:
+1. Commit changes on `main` after checks pass, or open a pull request into `main` when review is needed.
+2. Create a tag on the `main` commit:
 
 ```bash
 git checkout main
@@ -57,7 +56,7 @@ git tag v1.0.3
 git push origin v1.0.3
 ```
 
-The `Build` workflow runs on `main`, `nightly`, pull requests, and tags matching `v*`.
+The `Build` workflow runs on `main`, pull requests into `main`, and tags matching `v*`.
 
 The frontend is built with React, TypeScript, and Vite before Tauri packaging.
 
