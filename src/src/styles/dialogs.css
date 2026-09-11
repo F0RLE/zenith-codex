@@ -726,6 +726,14 @@
   border-radius: 6px 0 0 6px;
 }
 
+/* Edge/Chromium adds its own password reveal control. SecretField already
+   renders the accessible themed toggle, so showing both creates two reveal
+   buttons and makes the key field look like it accepts two actions. */
+.secret-field input::-ms-reveal,
+.secret-field input::-ms-clear {
+  display: none;
+}
+
 .secret-field button {
   border-left: 0;
   border-radius: 0 6px 6px 0;

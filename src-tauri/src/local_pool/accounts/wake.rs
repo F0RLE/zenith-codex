@@ -124,8 +124,11 @@ impl CodexWakeClient {
         }
 
         let started = Instant::now();
-        let response = self
+        let identity = self
             .identity
+            .with_configured_client_version()
+            .map_err(|_| WakeExecutionFailure::configuration())?;
+        let response = identity
             .apply(
                 self.http
                     .post(self.responses_endpoint.clone())

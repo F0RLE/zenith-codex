@@ -69,6 +69,18 @@ async fn spawn_metadata_server(
     }
 }
 
+#[test]
+fn provider_image_metadata_does_not_change_unknown_model_capabilities() {
+    let runtime = quota_runtime(QuotaSnapshot::default());
+    runtime.remember_codex_model_manifest("account-1", serde_json::json!({"models":[
+        {"slug":"gpt-test", "input_modalities":["text"], "supported_reasoning_levels":[{"effort":"high","description":"high"}]}
+    ]}), current_time_ms());
+    let capabilities = runtime.model_capabilities("gpt-test");
+    assert_eq!(capabilities.input_modalities, ["text", "image"]);
+    assert!(capabilities.reasoning_effort_levels.is_empty());
+    assert_eq!(capabilities.tool_call, Some(false));
+}
+
 fn runtime_for_metadata_server(server: &MetadataTestServer) -> GatewayRuntime {
     let mut provider = source("source-1", "upstream-secret", &["provider/fable"]);
     provider.base_url = format!("{}/v1", server.url);
@@ -275,6 +287,132 @@ fn quota_runtime(snapshot: QuotaSnapshot) -> GatewayRuntime {
 }
 
 #[test]
+fn automatic_responses_lite_requires_every_configured_route_to_confirm_support() {
+    let account_only = quota_runtime(QuotaSnapshot::default());
+    let account_only_key = account_only
+        .authenticate(Some(&HeaderValue::from_static("Bearer local-secret")))
+        .unwrap();
+    assert!(
+        !account_only.codex_model_responses_routes_all_support_lite(&account_only_key, "gpt-test")
+    );
+    account_only.set_codex_model_uses_responses_lite("account-1", "gpt-test", true);
+    assert!(
+        account_only.codex_model_responses_routes_all_support_lite(&account_only_key, "gpt-test")
+    );
+
+    let first = quota_account(QuotaSnapshot::default());
+    let mut second = first.clone();
+    second.id = "account-2".to_string();
+    second.chatgpt_account_id = "account-2".to_string();
+    let all_accounts = GatewayRuntime::from_mixed_pool(
+        Vec::new(),
+        vec![first, second],
+        vec![RuntimeMixedLocalKey {
+            key: key("key-1", "local-secret"),
+            enabled: true,
+            source_ids: None,
+            account_ids: None,
+            allowed_models: Vec::new(),
+            excluded_models: Vec::new(),
+            model_prefix: None,
+            wire_apis: None,
+        }],
+        RuntimeChatGptAuth {
+            token_authority: Arc::new(TokenAuthority::new(1).unwrap()),
+            refresh_adapter: Arc::new(NeverRefresh),
+            persistence_adapter: Arc::new(NoopPersistence),
+            refresh_skew_ms: 60_000,
+            agent_identities: HashMap::new(),
+        },
+        GatewayRuntimeOptions::default(),
+        Arc::new(|_| {}),
+    )
+    .unwrap();
+    let all_accounts_key = all_accounts
+        .authenticate(Some(&HeaderValue::from_static("Bearer local-secret")))
+        .unwrap();
+    all_accounts.set_codex_model_uses_responses_lite("account-1", "gpt-test", true);
+    assert!(
+        !all_accounts.codex_model_responses_routes_all_support_lite(&all_accounts_key, "gpt-test")
+    );
+    all_accounts.set_codex_model_uses_responses_lite("account-2", "gpt-test", true);
+    assert!(
+        all_accounts.codex_model_responses_routes_all_support_lite(&all_accounts_key, "gpt-test")
+    );
+    assert!(all_accounts
+        .codex_model_account_responses_routes_all_support_lite(&all_accounts_key, "gpt-test"));
+
+    let mixed = GatewayRuntime::from_mixed_pool(
+        vec![RuntimeSource::unrestricted(source(
+            "api-source",
+            "upstream-secret",
+            &["gpt-test"],
+        ))],
+        vec![quota_account(QuotaSnapshot::default())],
+        vec![RuntimeMixedLocalKey {
+            key: key("key-1", "local-secret"),
+            enabled: true,
+            source_ids: None,
+            account_ids: None,
+            allowed_models: Vec::new(),
+            excluded_models: Vec::new(),
+            model_prefix: None,
+            wire_apis: None,
+        }],
+        RuntimeChatGptAuth {
+            token_authority: Arc::new(TokenAuthority::new(1).unwrap()),
+            refresh_adapter: Arc::new(NeverRefresh),
+            persistence_adapter: Arc::new(NoopPersistence),
+            refresh_skew_ms: 60_000,
+            agent_identities: HashMap::new(),
+        },
+        GatewayRuntimeOptions::default(),
+        Arc::new(|_| {}),
+    )
+    .unwrap();
+    let mixed_key = mixed
+        .authenticate(Some(&HeaderValue::from_static("Bearer local-secret")))
+        .unwrap();
+    mixed.set_codex_model_uses_responses_lite("account-1", "gpt-test", true);
+    assert!(!mixed.codex_model_responses_routes_all_support_lite(&mixed_key, "gpt-test"));
+    assert!(mixed.codex_model_account_responses_routes_all_support_lite(&mixed_key, "gpt-test"));
+}
+
+#[tokio::test]
+async fn persistent_candidate_wait_does_not_expire_on_elapsed_retry_at() {
+    let runtime = quota_runtime(QuotaSnapshot::default());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        runtime.wait_for_candidate_availability(
+            Some(0),
+            std::time::Duration::from_millis(10),
+            None,
+        ),
+    )
+    .await
+    .expect("persistent wait should use bounded backoff");
+
+    assert!(result);
+}
+
+#[tokio::test]
+async fn bounded_candidate_wait_retries_when_the_cooldown_elapsed_before_waiting() {
+    let runtime = quota_runtime(QuotaSnapshot::default());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        runtime.wait_for_candidate_availability(
+            Some(0),
+            std::time::Duration::from_millis(10),
+            Some(tokio::time::Instant::now() + std::time::Duration::from_secs(1)),
+        ),
+    )
+    .await
+    .expect("an elapsed cooldown should be retried immediately");
+
+    assert!(result);
+}
+
+#[test]
 fn chatgpt_team_breaker_blocks_siblings_and_deduplicates() {
     let first = quota_account(QuotaSnapshot::default());
     let mut sibling = first.clone();
@@ -397,6 +535,7 @@ fn quota_429_does_not_turn_a_slot_into_permanent_exhaustion() {
             source_id: "openai-codex".into(),
             candidate_id: Some("account-1".into()),
             account_id: Some("account-1".into()),
+            account_token_generation: None,
             client_context_id: None,
             routing: None,
             requested_model: Some("gpt-test".into()),
@@ -1043,6 +1182,7 @@ async fn source_capability_failure_does_not_permanently_hide_a_declared_model() 
             source_id: "source-1".into(),
             candidate_id: Some("source-1".into()),
             account_id: None,
+            account_token_generation: None,
             client_context_id: None,
             routing: None,
             requested_model: Some("gpt-test".into()),
@@ -2058,6 +2198,17 @@ async fn known_group_modes_reach_codex_without_being_reported_as_detected() {
 
 #[tokio::test]
 async fn provider_reasoning_modes_override_known_model_fallback_for_catalog() {
+    use crate::model_metadata::{ModelMetadataCatalog, ModelMetadataCatalogHandle};
+
+    let catalog = ModelMetadataCatalog::from_models_dev_json(
+        r#"{
+            "openai/gpt-5.6-terra": {
+                "reasoning": true,
+                "reasoning_effort_levels": ["minimal", "medium", "max"]
+            }
+        }"#,
+    )
+    .unwrap();
     let runtime = GatewayRuntime::from_pool(
         vec![RuntimeSource::unrestricted(source(
             "source-1",
@@ -2065,7 +2216,10 @@ async fn provider_reasoning_modes_override_known_model_fallback_for_catalog() {
             &["gpt-5.6-terra"],
         ))],
         vec![RuntimeLocalKey::unrestricted(key("key-1", "local-secret"))],
-        GatewayRuntimeOptions::default(),
+        GatewayRuntimeOptions {
+            model_metadata_catalog: Some(ModelMetadataCatalogHandle::new(catalog)),
+            ..GatewayRuntimeOptions::default()
+        },
         Arc::new(|_| {}),
     )
     .unwrap();
@@ -2091,10 +2245,14 @@ async fn provider_reasoning_modes_override_known_model_fallback_for_catalog() {
         runtime.declared_source_reasoning_levels("gpt-5.6-terra"),
         vec!["ultra".to_string()]
     );
+    assert_eq!(
+        runtime.source_declared_reasoning_levels("gpt-5.6-terra"),
+        Some(vec!["ultra".to_string()])
+    );
 }
 
 #[tokio::test]
-async fn explicit_empty_reasoning_metadata_suppresses_known_model_fallback() {
+async fn refreshed_source_metadata_clears_removed_reasoning_declarations() {
     let runtime = GatewayRuntime::from_pool(
         vec![RuntimeSource::unrestricted(source(
             "source-1",
@@ -2103,6 +2261,73 @@ async fn explicit_empty_reasoning_metadata_suppresses_known_model_fallback() {
         ))],
         vec![RuntimeLocalKey::unrestricted(key("key-1", "local-secret"))],
         GatewayRuntimeOptions::default(),
+        Arc::new(|_| {}),
+    )
+    .unwrap();
+    let authenticated = runtime
+        .authenticate(Some(&HeaderValue::from_static("Bearer local-secret")))
+        .unwrap();
+    let now_ms = current_time_ms();
+
+    runtime.remember_source_model_manifest(
+        "source-1",
+        serde_json::json!({
+            "data": [{
+                "id": "gpt-5.6-terra",
+                "reasoningEffortModes": ["low", "high"]
+            }]
+        }),
+        now_ms,
+    );
+    runtime
+        .codex_source_model_metadata(&authenticated, &[WireApi::Responses], now_ms)
+        .await;
+    assert_eq!(
+        runtime.declared_source_reasoning_levels("gpt-5.6-terra"),
+        vec!["low".to_string(), "high".to_string()]
+    );
+
+    // The route is still configured, but its refreshed manifest no longer
+    // declares reasoning. That must not leave stale selector options behind.
+    runtime.remember_source_model_manifest(
+        "source-1",
+        serde_json::json!({
+            "data": [{"id": "gpt-5.6-terra"}]
+        }),
+        now_ms + 1,
+    );
+    runtime
+        .codex_source_model_metadata(&authenticated, &[WireApi::Responses], now_ms + 1)
+        .await;
+    assert!(runtime
+        .declared_source_reasoning_levels("gpt-5.6-terra")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn explicit_empty_reasoning_metadata_suppresses_known_model_fallback() {
+    use crate::model_metadata::{ModelMetadataCatalog, ModelMetadataCatalogHandle};
+
+    let catalog = ModelMetadataCatalog::from_models_dev_json(
+        r#"{
+            "openai/gpt-5.6-terra": {
+                "reasoning": true,
+                "reasoning_effort_levels": ["minimal", "medium", "max"]
+            }
+        }"#,
+    )
+    .unwrap();
+    let runtime = GatewayRuntime::from_pool(
+        vec![RuntimeSource::unrestricted(source(
+            "source-1",
+            "upstream-secret",
+            &["gpt-5.6-terra"],
+        ))],
+        vec![RuntimeLocalKey::unrestricted(key("key-1", "local-secret"))],
+        GatewayRuntimeOptions {
+            model_metadata_catalog: Some(ModelMetadataCatalogHandle::new(catalog)),
+            ..GatewayRuntimeOptions::default()
+        },
         Arc::new(|_| {}),
     )
     .unwrap();
@@ -2189,7 +2414,7 @@ async fn codex_source_metadata_marks_bridge_images_but_requires_native_declarati
         .codex_source_model_metadata(&key, &[WireApi::Responses], now_ms)
         .await;
 
-    assert!(metadata.image_models.contains("vendor/claude-fable-5"));
+    assert!(!metadata.image_models.contains("vendor/claude-fable-5"));
     assert!(!metadata.image_models.contains("provider/text-only"));
 }
 
@@ -2443,6 +2668,43 @@ fn codex_aliases_resolve_without_shadowing_exact_model_ids() {
             .as_deref(),
         Some("vendor/model")
     );
+}
+
+#[test]
+fn configured_model_resolution_accepts_temporary_health_outage_but_not_unknown_models() {
+    let runtime = GatewayRuntime::from_pool(
+        vec![RuntimeSource::unrestricted(source(
+            "source",
+            "upstream-secret",
+            &["gpt-test"],
+        ))],
+        vec![RuntimeLocalKey::unrestricted(key("key", "secret"))],
+        GatewayRuntimeOptions::default(),
+        Arc::new(|_| {}),
+    )
+    .unwrap();
+    let authenticated = runtime
+        .authenticate(Some(&HeaderValue::from_static("Bearer secret")))
+        .unwrap();
+    assert!(runtime.set_candidate_health("source", CandidateHealth::Unhealthy));
+
+    assert!(runtime
+        .resolve_visible_model(
+            &authenticated,
+            "gpt-test",
+            &[WireApi::Responses],
+            current_time_ms(),
+        )
+        .is_none());
+    assert_eq!(
+        runtime
+            .resolve_configured_model(&authenticated, "gpt-test", &[WireApi::Responses])
+            .as_deref(),
+        Some("gpt-test")
+    );
+    assert!(runtime
+        .resolve_configured_model(&authenticated, "unknown", &[WireApi::Responses])
+        .is_none());
 }
 
 #[test]

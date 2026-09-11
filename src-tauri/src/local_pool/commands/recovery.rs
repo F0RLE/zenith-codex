@@ -27,6 +27,8 @@ const MAX_EXPORT_TEXT: usize = 512;
 pub enum RelayFolder {
     Data,
     ProfileBackups,
+    #[serde(rename = "opencode_backups")]
+    OpenCodeBackups,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -127,6 +129,7 @@ pub fn open_relay_folder(
     let path = match folder {
         RelayFolder::Data => state.data_root(),
         RelayFolder::ProfileBackups => state.profile_backup_root(),
+        RelayFolder::OpenCodeBackups => state.opencode_backup_root(),
     };
     fs::create_dir_all(&path).map_err(io_error)?;
     app.opener()
@@ -342,6 +345,12 @@ fn io_error(error: impl ToString) -> CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_folder_serializes_open_code_backup_directory_name() {
+        let folder: RelayFolder = serde_json::from_str("\"opencode_backups\"").unwrap();
+        assert!(matches!(folder, RelayFolder::OpenCodeBackups));
+    }
 
     #[test]
     fn export_validation_rejects_control_text_and_oversized_fields() {

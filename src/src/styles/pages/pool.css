@@ -57,6 +57,13 @@
   line-height: 14px;
 }
 
+.pool-member-toolbar .pool-priority-label .pool-next-route {
+  color: var(--relay-muted);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 400;
+}
+
 .pool-member-toolbar .pool-quota-actions {
   order: 2;
   margin-left: auto;
@@ -321,6 +328,10 @@
   background: var(--relay-accent);
   pointer-events: none;
   content: "";
+}
+
+.pool-member-card.next:not(.current)::before {
+  display: none;
 }
 
 .pool-member-identity {

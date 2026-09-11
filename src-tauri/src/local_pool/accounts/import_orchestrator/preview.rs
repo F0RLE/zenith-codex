@@ -140,6 +140,7 @@ pub(super) async fn prepare_import_preview(
                 .and_then(parse_subscription_timestamp_ms),
             import_proxy,
             settings.quota_request_timeout_seconds,
+            state.account_check_url(),
         )
         .await
         {

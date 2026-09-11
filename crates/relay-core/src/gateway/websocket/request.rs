@@ -2,9 +2,10 @@ use super::{
     now_ms, AuthenticatedKey, ExecutorRoute, GatewayFailure, RESPONSES_LITE_METADATA_KEY,
     WEBSOCKET_PROTOCOLS,
 };
-use crate::gateway::request::codex_background_request_kind;
-use crate::gateway::request::ServiceTierPolicy;
-use crate::gateway::request::{client_context_fingerprint, is_managed_codex_client};
+use crate::gateway::request::{
+    client_context_fingerprint, codex_background_request_kind, is_managed_codex_client,
+    response_tool_call_ids, tool_call_output_ids, ServiceTierPolicy,
+};
 use crate::usage::ReasoningEffortDiagnostics;
 use crate::{DefaultServiceTier, GatewayRuntime, ToolUseDiagnostics, WireApi};
 use axum::http::HeaderMap;
@@ -21,8 +22,11 @@ pub(super) struct ClientRequest {
     service_tier_policy: ServiceTierPolicy,
     responses_lite_candidates: Vec<String>,
     pub(super) response_affinity_key: Option<String>,
+    pub(super) requires_affinity_owner: bool,
+    pub(super) has_unpaired_tool_output: bool,
     pub(super) prompt_affinity_key: Option<String>,
     pub(super) background_kind: Option<&'static str>,
+    pub(super) wait_for_candidate_availability: bool,
 }
 
 impl ClientRequest {
@@ -79,10 +83,15 @@ impl ClientRequest {
             .ok_or_else(|| GatewayFailure::invalid_request("model must be a non-empty string"))?
             .to_string();
         let service_tier_policy = if is_managed_codex_client(headers) {
-            ServiceTierPolicy::pool_owned()
+            ServiceTierPolicy::pool_owned(&value)
         } else {
-            ServiceTierPolicy::client_owned()
+            ServiceTierPolicy::client_owned(&value)
         };
+        let managed_codex_client = is_managed_codex_client(headers);
+        // Preserve client eligibility with the request. The live control is
+        // checked in the connection/retry loop so an in-flight wait can be
+        // disabled without reconnecting the client.
+        let wait_for_candidate_availability = managed_codex_client;
         let background_kind = codex_background_request_kind(headers, &value);
         let request_id = crate::gateway::request::request_id();
         if let Some(kind) = background_kind {
@@ -90,14 +99,54 @@ impl ClientRequest {
         }
         let resolved_model = runtime
             .resolve_visible_model(key, &requested_model, WEBSOCKET_PROTOCOLS, now_ms())
+            .or_else(|| {
+                (managed_codex_client && runtime.chatgpt_retry_until_available())
+                    .then(|| {
+                        runtime.resolve_configured_model(key, &requested_model, WEBSOCKET_PROTOCOLS)
+                    })
+                    .flatten()
+            })
             .ok_or_else(GatewayFailure::model_not_found)?;
         let responses_lite = headers
             .contains_key(crate::gateway::request::CODEX_RESPONSES_LITE_HEADER)
             || metadata_flag(&value, RESPONSES_LITE_METADATA_KEY);
+        // Keep automatic Lite consistent with HTTP: a pool that can fall back
+        // to a non-Lite or non-official Responses route must stay on full
+        // Responses for the whole request contract. An explicit client Lite
+        // signal is still preserved by `responses_lite` above.
         let responses_lite_candidates =
-            runtime.codex_model_responses_lite_candidates(&resolved_model);
+            if runtime.codex_model_responses_routes_all_support_lite(key, &resolved_model) {
+                runtime.codex_model_responses_lite_candidates(&resolved_model)
+            } else {
+                Default::default()
+            };
         let response_affinity_key = runtime
             .response_affinity_key(value.get("previous_response_id").and_then(Value::as_str));
+        let response_binding_known = response_affinity_key
+            .as_deref()
+            .is_some_and(|affinity_key| {
+                runtime.has_response_affinity_binding(affinity_key, now_ms())
+            });
+        let tool_output_ids = tool_call_output_ids(&value);
+        let tool_call_ids = response_tool_call_ids(&value);
+        let has_unpaired_tool_output = tool_output_ids
+            .iter()
+            .any(|output_id| !tool_call_ids.iter().any(|call_id| call_id == output_id));
+        let tool_affinity_key = tool_output_ids.iter().find_map(|call_id| {
+            let affinity_key = runtime.tool_call_affinity_key(&key.id, call_id)?;
+            runtime
+                .has_response_affinity_binding(&affinity_key, now_ms())
+                .then_some(affinity_key)
+        });
+        let has_previous_response_id = response_affinity_key.is_some();
+        // A model switch can make an old tool call lose its route affinity.
+        // Keep the current conversation alive and let normal pool selection
+        // continue it instead of asking the client to start a new one.
+        let response_affinity_key = if response_binding_known {
+            response_affinity_key
+        } else {
+            tool_affinity_key.or(response_affinity_key)
+        };
         let client_context_id = client_context_fingerprint(headers);
         let prompt_affinity_key = runtime.prompt_affinity_key(
             &key.id,
@@ -115,8 +164,11 @@ impl ClientRequest {
             service_tier_policy,
             responses_lite_candidates,
             response_affinity_key,
+            requires_affinity_owner: has_previous_response_id || has_unpaired_tool_output,
+            has_unpaired_tool_output,
             prompt_affinity_key,
             background_kind,
+            wait_for_candidate_availability,
         })
     }
 
@@ -132,10 +184,14 @@ impl ClientRequest {
         );
     }
 
-    pub(super) fn service_tier(&self) -> DefaultServiceTier {
+    pub(super) fn service_tier(
+        &self,
+        runtime: &GatewayRuntime,
+        route: &ExecutorRoute,
+    ) -> DefaultServiceTier {
         self.service_tier_policy.effective_tier(
             &self.value,
-            DefaultServiceTier::Standard,
+            runtime.model_service_tier(&route.source_model),
             WireApi::Responses,
         )
     }
@@ -224,12 +280,18 @@ impl ClientRequest {
         crate::gateway::request::contains_tool_call_output(&self.value)
     }
 
+    pub(super) const fn has_unpaired_tool_output(&self) -> bool {
+        self.has_unpaired_tool_output
+    }
+
     pub(super) fn drop_previous_response_id(&mut self) -> bool {
         let Some(object) = self.value.as_object_mut() else {
             return false;
         };
         if object.remove("previous_response_id").is_some() {
             self.response_affinity_key = None;
+            self.requires_affinity_owner = false;
+            self.has_unpaired_tool_output = false;
             true
         } else {
             false
@@ -239,6 +301,10 @@ impl ClientRequest {
     pub(super) fn recover_invalid_encrypted_content(&mut self) -> bool {
         let mut attempted = false;
         crate::gateway::request::try_recover_encrypted_content(&mut self.value, &mut attempted)
+    }
+
+    pub(super) fn drop_unpaired_tool_calls(&mut self) -> bool {
+        crate::gateway::request::drop_unpaired_responses_tool_calls(&mut self.value)
     }
 
     pub(super) fn repair_custom_tool_item_ids(&mut self) -> bool {

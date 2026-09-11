@@ -1110,6 +1110,43 @@
   color: var(--relay-error);
 }
 
+/* An upstream credit ledger is not a reset token or a Relay value estimate.
+ * Keep it with the provider quota it describes, on its own compact row. */
+.account-provider-quota-strip {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  margin: 7px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--relay-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.account-provider-quota-strip dt,
+.account-provider-quota-strip dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-provider-quota-strip dt {
+  color: var(--relay-muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.account-provider-quota-strip dd {
+  color: var(--relay-text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 16px;
+}
+
 .account-card-footer {
   min-height: 52px;
   display: flex;

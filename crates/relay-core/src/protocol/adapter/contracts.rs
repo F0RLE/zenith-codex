@@ -174,6 +174,38 @@ impl SourceAdapter {
     }
 }
 
+/// Responses context management cannot be translated into another protocol.
+/// Inspect only the control field and input item types, never text or nested
+/// tool payloads.
+pub(super) fn validate_bridge_compaction(request: &Value) -> AdapterResult<()> {
+    let is_compaction = |item: &Value| {
+        matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("compaction" | "compaction_summary")
+        )
+    };
+    let configured = request
+        .get("context_management")
+        .is_some_and(|value| match value {
+            Value::Null => false,
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(fields) => !fields.is_empty(),
+            _ => true,
+        });
+    let history = request.get("input").is_some_and(|input| match input {
+        Value::Array(items) => items.iter().any(is_compaction),
+        Value::Object(_) => is_compaction(input),
+        _ => false,
+    });
+    if configured || history {
+        return Err(AdapterError {
+            code: "adapter_compaction_unsupported",
+            message: "Responses compaction history requires a native Responses route",
+        });
+    }
+    Ok(())
+}
+
 /// The internal upstream thinking contract used by a Messages bridge.
 /// Persisted source bindings normalize to `Adaptive`; the enum remains part of
 /// the adapter contract and focused protocol tests.
@@ -230,7 +262,9 @@ impl AdapterError {
     pub(crate) fn is_route_incompatible(self) -> bool {
         matches!(
             self.code,
-            "adapter_tool_unsupported" | "adapter_reasoning_unsupported"
+            "adapter_tool_unsupported"
+                | "adapter_reasoning_unsupported"
+                | "adapter_compaction_unsupported"
         )
     }
 

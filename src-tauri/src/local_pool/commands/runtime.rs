@@ -115,7 +115,10 @@ pub(in crate::local_pool) async fn runtime_from_store(
         }
         if secret.has_oauth() {
             authority
-                .register(
+                // Runtime reconstruction must not erase a newer in-memory
+                // refresh or its pending durable metadata retry with the
+                // snapshot read at the beginning of this build.
+                .register_if_newer(
                     &account_id,
                     secret.to_token_set().map_err(account_credential_error)?,
                     account.account.auth_state,
@@ -210,6 +213,7 @@ pub(in crate::local_pool) async fn runtime_from_store(
         quota_stale_after_ms,
         image_base_model: None,
         image_pricing_catalog: Some(state.pricing_catalog()),
+        model_metadata_catalog: Some(state.model_metadata_loader().catalog_handle()),
         model_reasoning_allowed_levels: settings.model_reasoning_allowed_levels,
         response_affinity_store: Some(state.response_affinity_store()),
         provider_storm_breaker: false,
@@ -232,6 +236,7 @@ pub(in crate::local_pool) async fn runtime_from_store(
     runtime.set_chatgpt_team_breaker_callback(state.runtime_team_breaker_callback());
     runtime.set_codex_background_tasks_enabled(settings.codex_background_tasks_enabled);
     runtime.set_codex_websockets_enabled(settings.codex_websockets_enabled);
+    runtime.set_chatgpt_retry_until_available(settings.chatgpt_retry_until_available);
     runtime
         .set_model_service_tier_overrides(settings.model_service_tier_overrides)
         .map_err(core_error)?;
@@ -393,28 +398,29 @@ pub(in crate::local_pool) async fn sync_records_or_rollback(
     .await
 }
 
-pub(in crate::local_pool) async fn sync_accounts_or_rollback(
+pub(in crate::local_pool) async fn sync_account_or_rollback(
     state: &DesktopState,
-    old_accounts: Vec<LocalAccountRecord>,
-    old_keys: Vec<LocalGatewayKeyRecord>,
+    previous_account: LocalAccountRecord,
+    attempted_account: LocalAccountRecord,
 ) -> Result<()> {
-    restart_or_rollback(state, || {
+    restart_or_rollback(state, move || {
         state
             .store()?
-            .replace_accounts_and_keys(old_accounts, old_keys)
+            .restore_account_if_current(&previous_account, &attempted_account)
+            .map(|_| ())
     })
     .await
 }
 
 pub(in crate::local_pool) async fn sync_refreshed_account_or_rollback(
     state: &DesktopState,
-    account_id: &str,
+    previous_account: LocalAccountRecord,
+    attempted_account: LocalAccountRecord,
     models_changed: bool,
-    old_accounts: Vec<LocalAccountRecord>,
-    old_keys: Vec<LocalGatewayKeyRecord>,
 ) -> Result<()> {
+    let account_id = attempted_account.account.id.clone();
     if models_changed {
-        return sync_accounts_or_rollback(state, old_accounts, old_keys).await;
+        return sync_account_or_rollback(state, previous_account, attempted_account).await;
     }
     let Some(runtime) = state.gateway.runtime().await else {
         return Ok(());
@@ -422,7 +428,7 @@ pub(in crate::local_pool) async fn sync_refreshed_account_or_rollback(
     let (enabled, health, quota, quota_updated_at_ms) = {
         let store = state.store()?;
         let account = store
-            .account(account_id)
+            .account(&account_id)
             .ok_or_else(|| LocalPoolError::new(ErrorCode::NotFound, "account not found"))?;
         let operational = runtime_account_operational_state(&account.account, current_time_ms());
         (
@@ -433,7 +439,7 @@ pub(in crate::local_pool) async fn sync_refreshed_account_or_rollback(
         )
     };
     if runtime.update_candidate_availability_at(
-        account_id,
+        &account_id,
         enabled,
         health,
         quota,
@@ -441,7 +447,7 @@ pub(in crate::local_pool) async fn sync_refreshed_account_or_rollback(
     ) {
         return Ok(());
     }
-    sync_accounts_or_rollback(state, old_accounts, old_keys).await
+    sync_account_or_rollback(state, previous_account, attempted_account).await
 }
 
 pub(in crate::local_pool) async fn sync_gateway_or_rollback(

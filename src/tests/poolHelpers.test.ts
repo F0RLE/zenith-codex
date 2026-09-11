@@ -3,7 +3,7 @@ import type { AccountSummary, RuntimeSnapshot, SourceSummary } from "../src/feat
 import {
   clampRoutingCount,
   comparePoolMembers,
-  groupModelSummariesForLauncher,
+  groupModelSummaries,
   mergeSubscriptionPlanOrder,
   modelSummaries,
   sourceOrderForRole,
@@ -144,7 +144,7 @@ describe("pool helpers", () => {
         maxRetryCandidates: 3,
         routingStrategy: "adaptive",
         defaultServiceTier: "standard",
-        models: [{ id: "gpt-test", enabled: false, memberCount: 2, codexVisible: true, codexDisplayName: "", catalogRank: null, inputMicroUsdPerMillion: null, outputMicroUsdPerMillion: null, customPrice: false }],
+        models: [{ id: "gpt-test", enabled: false, memberCount: 2, codexVisible: true, codexDisplayName: "", catalogProvider: "openai", catalogFamily: "gpt", inputMicroUsdPerMillion: null, outputMicroUsdPerMillion: null, customPrice: false }],
       },
     });
     expect(modelSummaries(explicit)[0]).toMatchObject({ codexDisplayName: "gpt-test", reasoningLevels: [], reasoningSupportedLevels: [], reasoningAllowedLevels: [], reasoningConfigurable: false });
@@ -162,7 +162,7 @@ describe("pool helpers", () => {
       accounts: [account({ models: ["GPT-TEST"] })],
     }));
     expect(fallback[0]).toMatchObject({ id: "gpt-test", memberCount: 1, enabled: true });
-    expect(groupModelSummariesForLauncher(fallback, []).map((group) => group.id)).toEqual(["openai"]);
+    expect(groupModelSummaries(fallback, [account({ models: ["GPT-TEST"] })]).map((group) => group.provider)).toEqual(["openai"]);
   });
 
   test("keeps selection and numeric policy inputs bounded", () => {

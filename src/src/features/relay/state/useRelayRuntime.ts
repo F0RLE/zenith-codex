@@ -43,6 +43,7 @@ export function useRelayRuntime({
   const [runtimeActivity, setRuntimeActivity] = useState<RuntimeActivityState>({
     revision: 0,
     lastCandidateId: null,
+    candidates: {},
   });
   const [loading, setLoading] = useState(true);
   const modeRef = useRef(mode);
@@ -77,7 +78,7 @@ export function useRelayRuntime({
     stateRevision.current += 1;
     runtimeActivityOverlay.current.clear();
     runtimeRoutingOrderBase.current = [];
-    setRuntimeActivity({ revision: 0, lastCandidateId: null });
+    setRuntimeActivity({ revision: 0, lastCandidateId: null, candidates: {} });
     writeRelayPreference(RELAY_STORAGE_KEYS.mode, next);
     setRuntime(null);
     resetUsage();
@@ -271,7 +272,10 @@ export function useRelayRuntime({
       const pending = pendingRuntimeActivity;
       pendingRuntimeActivity = null;
       if (pending) {
-        setRuntimeActivity((current) => pending.revision > current.revision ? pending : current);
+        const candidates = Object.fromEntries(runtimeActivityOverlay.current);
+        setRuntimeActivity((current) => pending.revision > current.revision
+          ? { ...pending, candidates }
+          : current);
       }
       if (document.visibilityState !== "visible" || !isRuntimeRefreshPage(pageRef.current)) return;
       setRuntime((snapshot) => {
@@ -345,6 +349,7 @@ export function useRelayRuntime({
         pendingRuntimeActivity = {
           revision: activity.revision,
           lastCandidateId: activity.candidateId,
+          candidates: {},
         };
       }
       scheduleRuntimeActivityFlush();

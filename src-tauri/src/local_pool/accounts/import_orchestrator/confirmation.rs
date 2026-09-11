@@ -140,6 +140,7 @@ pub(in crate::local_pool::accounts) async fn confirm_local_account_import_inner(
                     input.discover_models,
                     probe_quota,
                     &configured_models,
+                    state.account_check_url(),
                 )
                 .await
                 {

@@ -88,8 +88,13 @@ pub(in crate::gateway) enum TerminalOutcome {
 
 pub(in crate::gateway) fn parse_sse_event(event: &[u8]) -> TerminalEvent {
     let mut data = Vec::new();
+    let mut event_name = None;
     for line in event.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if let Some(value) = line.strip_prefix(b"event:") {
+            event_name = std::str::from_utf8(value.trim_ascii()).ok();
+            continue;
+        }
         let Some(value) = line.strip_prefix(b"data:") else {
             continue;
         };
@@ -120,6 +125,18 @@ pub(in crate::gateway) fn parse_sse_event(event: &[u8]) -> TerminalEvent {
         };
     }
     let Ok(value) = serde_json::from_slice::<Value>(&data) else {
+        // Responses context compaction is an opaque provider-owned stream. A
+        // few upstream implementations send its delta as a raw/encrypted
+        // payload even though ordinary Responses events are JSON. It must be
+        // passed through unchanged; rejecting it here turns a valid ongoing
+        // compaction into the misleading 502 `stream_invalid` error.
+        if event_name.is_some_and(is_opaque_compaction_event) {
+            return TerminalEvent {
+                has_data: true,
+                valid: true,
+                ..TerminalEvent::default()
+            };
+        }
         return TerminalEvent {
             has_data: true,
             ..TerminalEvent::default()
@@ -177,6 +194,8 @@ pub(in crate::gateway) fn has_output_delta(value: &Value, event_type: Option<&st
         event_type,
         Some(
             "response.output_text.delta"
+                | "response.reasoning_text.delta"
+                | "response.reasoning_summary_text.delta"
                 | "response.refusal.delta"
                 | "response.function_call_arguments.delta"
                 | "response.custom_tool_call_input.delta"
@@ -213,6 +232,37 @@ pub(in crate::gateway) fn has_output_delta(value: &Value, event_type: Option<&st
         .get("choices")
         .and_then(Value::as_array)
         .is_some_and(|choices| choices.iter().any(chat_choice_has_output_delta))
+        || value
+            .get("candidates")
+            .and_then(Value::as_array)
+            .is_some_and(|candidates| candidates.iter().any(gemini_candidate_has_output_delta))
+}
+
+/// Detects the upstream's silent pre-output abort precisely enough for a safe
+/// candidate retry. A missing or non-numeric token count is intentionally not
+/// treated as empty: the response then remains owned by the selected route.
+pub(in crate::gateway) fn is_empty_responses_incomplete(
+    value: &Value,
+    saw_output: bool,
+    completed_output_items: usize,
+) -> bool {
+    if value.get("type").and_then(Value::as_str) != Some("response.incomplete")
+        || saw_output
+        || completed_output_items > 0
+    {
+        return false;
+    }
+    if value
+        .pointer("/response/output")
+        .and_then(Value::as_array)
+        .is_some_and(|output| !output.is_empty())
+    {
+        return false;
+    }
+    value
+        .pointer("/response/usage/output_tokens")
+        .and_then(Value::as_number)
+        .is_some_and(|tokens| tokens.to_string() == "0")
 }
 
 fn output_item_has_meaningful_tool_call(item: &Value) -> bool {
@@ -258,4 +308,63 @@ fn function_delta_has_output(function: &Value) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|text| !text.is_empty())
     })
+}
+
+fn is_opaque_compaction_event(event_name: &str) -> bool {
+    event_name.starts_with("response.compaction.")
+}
+
+fn gemini_candidate_has_output_delta(candidate: &Value) -> bool {
+    candidate
+        .pointer("/content/parts")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+                    || part.get("functionCall").is_some()
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_responses_compaction_delta_is_forwarded_without_stream_invalid() {
+        let event = parse_sse_event(
+            b"event: response.compaction.delta\ndata: encrypted-compaction-fragment\n\n",
+        );
+
+        assert!(event.has_data);
+        assert!(event.valid);
+        assert_eq!(event.outcome, None);
+    }
+
+    #[test]
+    fn malformed_non_compaction_event_remains_invalid() {
+        let event = parse_sse_event(b"event: response.output_text.delta\ndata: {broken\n\n");
+
+        assert!(event.has_data);
+        assert!(!event.valid);
+    }
+
+    #[test]
+    fn empty_incomplete_requires_explicit_zero_tokens_and_no_output() {
+        let empty = serde_json::json!({
+            "type": "response.incomplete",
+            "response": {"output": [], "usage": {"output_tokens": 0}}
+        });
+        assert!(is_empty_responses_incomplete(&empty, false, 0));
+
+        let decimal_zero = serde_json::json!({
+            "type": "response.incomplete",
+            "response": {"output": [], "usage": {"output_tokens": 0.0}}
+        });
+        assert!(!is_empty_responses_incomplete(&decimal_zero, false, 0));
+        assert!(!is_empty_responses_incomplete(&empty, true, 0));
+        assert!(!is_empty_responses_incomplete(&empty, false, 1));
+    }
 }

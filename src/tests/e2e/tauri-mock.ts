@@ -40,6 +40,9 @@ export type MockOptions = {
   exhaustedQuotaWindow?: "primary" | "secondary";
   quotaAvailable?: boolean;
   resetCreditsAvailable?: number;
+  providerCredits?: number;
+  resetCreditsError?: string;
+  resetCreditsRefreshError?: string;
   quotaRefreshStatus?: "pending" | "refreshing" | "updated" | "failed" | "requires_reauth";
   freeAccountHealthy?: boolean;
   gatewayRunning?: boolean;
@@ -120,7 +123,7 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
     const quotaNowMs = Date.now();
     const primaryResetAtMs = quotaNowMs + 90 * 60_000;
     const secondaryResetAtMs = quotaNowMs + 3 * 24 * 60 * 60_000;
-    const quota: { primary: MockQuotaWindow | null; secondary: MockQuotaWindow | null; supplemental: Array<{ id: string; label: string; serviceTier?: "standard" | "fast" | null; window: MockQuotaWindow }>; limitReached: boolean; resetCreditsAvailable: number; updatedAtMs: number; error: null } = {
+    const quota: { primary: MockQuotaWindow | null; secondary: MockQuotaWindow | null; supplemental: Array<{ id: string; label: string; serviceTier?: "standard" | "fast" | null; window: MockQuotaWindow }>; limitReached: boolean; resetCreditsAvailable: number; availableCreditsMicroUnits: number | null; providerCreditsAvailable: boolean; providerCreditsUnlimited: boolean; updatedAtMs: number; error: null } = {
       primary: { kind: "primary", availableBasisPoints: exhaustedQuotaWindow === "primary" ? 0 : 7200, explicitlyFull: false, resetAtMs: primaryResetAtMs, windowStartMs: primaryResetAtMs - 300 * 60_000, windowMinutes: 300, observedAtMs: quotaNowMs },
       secondary: { kind: "secondary", availableBasisPoints: exhaustedQuotaWindow === "secondary" ? 0 : 6400, explicitlyFull: false, resetAtMs: secondaryResetAtMs, windowStartMs: secondaryResetAtMs - 10_080 * 60_000, windowMinutes: 10_080, observedAtMs: quotaNowMs },
       supplemental: input.supplementalQuota ? [
@@ -130,6 +133,9 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
       ] : [],
       limitReached: false,
       resetCreditsAvailable: Math.max(0, input.resetCreditsAvailable ?? 1),
+      availableCreditsMicroUnits: input.providerCredits == null ? null : Math.round(input.providerCredits * 1_000_000),
+      providerCreditsAvailable: (input.providerCredits ?? 0) > 0,
+      providerCreditsUnlimited: false,
       updatedAtMs: Date.now(),
       error: null as { code: string; occurredAtMs: number } | null,
     };
@@ -262,26 +268,24 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
     });
       const systemCredentialId = "key_system";
       const profileDir = input.canonicalProfilePath ? "\\\\?\\C:\\Users\\Test\\.codex" : "C:\\Users\\Test\\.codex";
-    type MockModelSummary = { id: string; enabled: boolean; memberCount: number; codexVisible: boolean; codexDisplayName: string; catalogRank: number | null; inputMicroUsdPerMillion: number | null; cachedInputMicroUsdPerMillion: number | null; cacheWrite5mMicroUsdPerMillion?: number | null; cacheWrite1hMicroUsdPerMillion?: number | null; outputMicroUsdPerMillion: number | null; imageRequestPrices: Array<{ operation: "generation" | "edit"; quality: string; size: string; microUsd: number }>; customPrice: boolean; reasoningLevels: string[]; reasoningSupportedLevels: string[]; reasoningAllowedLevels: string[]; reasoningConfigurable: boolean; reasoningManualFallback?: boolean; speedSupported?: boolean; speedTier?: "standard" | "fast"; speedConfigurable?: boolean };
+    type MockModelSummary = { id: string; enabled: boolean; memberCount: number; codexVisible: boolean; codexDisplayName: string; catalogProvider?: string | null; catalogFamily?: string | null; catalogName?: string | null; catalogReleaseDate?: string | null; catalogLastUpdated?: string | null; catalogStatus?: string | null; inputMicroUsdPerMillion: number | null; cachedInputMicroUsdPerMillion: number | null; cacheWrite5mMicroUsdPerMillion?: number | null; cacheWrite1hMicroUsdPerMillion?: number | null; outputMicroUsdPerMillion: number | null; imageRequestPrices: Array<{ operation: "generation" | "edit"; quality: string; size: string; microUsd: number }>; customPrice: boolean; reasoningLevels: string[]; reasoningSupportedLevels: string[]; reasoningAllowedLevels: string[]; reasoningConfigurable: boolean; reasoningManualFallback?: boolean; speedSupported?: boolean; speedTier?: "standard" | "fast"; speedConfigurable?: boolean };
     type MockCandidateRuntime = { candidateId: string; kind: "api_source" | "oauth_account"; available: boolean; inFlight: number; activeRequestCount: number; activeModels: Array<{ model: string; requestCount: number }>; modelRetries?: Array<{ model: string; retryAtMs: number }>; lastUsedAtMs: number | null; nextRetryAtMs: number | null; halfOpen: boolean; dispatches: number };
-    const modelPrices: Record<string, Pick<MockModelSummary, "catalogRank" | "inputMicroUsdPerMillion" | "cachedInputMicroUsdPerMillion" | "outputMicroUsdPerMillion">> = {
-      "gpt-5.4": { catalogRank: 5, inputMicroUsdPerMillion: 2_500_000, cachedInputMicroUsdPerMillion: 250_000, outputMicroUsdPerMillion: 15_000_000 },
-      "gpt-5.4-mini": { catalogRank: 6, inputMicroUsdPerMillion: 750_000, cachedInputMicroUsdPerMillion: 75_000, outputMicroUsdPerMillion: 4_500_000 },
+    const modelPrices: Record<string, Pick<MockModelSummary, "inputMicroUsdPerMillion" | "cachedInputMicroUsdPerMillion" | "cacheWrite5mMicroUsdPerMillion" | "cacheWrite1hMicroUsdPerMillion" | "outputMicroUsdPerMillion">> = {
+      "gpt-5.4": { inputMicroUsdPerMillion: 2_500_000, cachedInputMicroUsdPerMillion: 250_000, outputMicroUsdPerMillion: 15_000_000 },
+      "gpt-5.4-mini": { inputMicroUsdPerMillion: 750_000, cachedInputMicroUsdPerMillion: 75_000, outputMicroUsdPerMillion: 4_500_000 },
+      "claude-opus-4-8": { inputMicroUsdPerMillion: 1_400_000, cachedInputMicroUsdPerMillion: 140_000, cacheWrite5mMicroUsdPerMillion: 1_750_000, cacheWrite1hMicroUsdPerMillion: 2_800_000, outputMicroUsdPerMillion: 7_000_000 },
     };
-    const modelGroupOrder = new Map(["openai", "anthropic", "other"].map((group, index) => [group, index]));
-    function modelLeaf(model: string) { return model.trim().toLowerCase().split("/").at(-1) ?? model.trim().toLowerCase(); }
-    function isOpenAiModel(model: string) { return /^(gpt-|codex-|o\d|text-|dall-e)/.test(model); }
-    function modelProviderGroup(model: string) {
-      const leaf = modelLeaf(model);
-      if (leaf.startsWith("claude-")) return "anthropic";
-      if (isOpenAiModel(leaf)) return "openai";
-      return "other";
-    }
-    function compareModelOrder(left: MockModelSummary, right: MockModelSummary) {
-      const leftGroup = modelGroupOrder.get(modelProviderGroup(left.id)) ?? 99;
-      const rightGroup = modelGroupOrder.get(modelProviderGroup(right.id)) ?? 99;
-      return leftGroup - rightGroup;
-    }
+    const modelMetadata: Record<string, Pick<MockModelSummary, "catalogProvider" | "catalogFamily" | "catalogName">> = {
+      "gpt-5.4": { catalogProvider: "openai", catalogFamily: "gpt", catalogName: "GPT-5.4" },
+      "gpt-5.4-mini": { catalogProvider: "openai", catalogFamily: "gpt", catalogName: "GPT-5.4 mini" },
+      "claude-opus-4-8": { catalogProvider: "anthropic", catalogFamily: "claude-opus", catalogName: "Claude Opus 4.8" },
+      "gemini-3.1-pro-preview": { catalogProvider: "google", catalogFamily: "gemini-pro", catalogName: "Gemini 3.1 Pro Preview" },
+      "gemini-3.6-flash-high": { catalogProvider: "google", catalogFamily: "gemini-flash", catalogName: "Gemini 3.6 Flash High" },
+      "gemini-3.6-flash-medium": { catalogProvider: "google", catalogFamily: "gemini-flash", catalogName: "Gemini 3.6 Flash Medium" },
+      "gemini-3.6-flash-low": { catalogProvider: "google", catalogFamily: "gemini-flash", catalogName: "Gemini 3.6 Flash Low" },
+      "grok-4.5": { catalogProvider: "xai", catalogFamily: "grok", catalogName: "Grok 4.5" },
+      "glm-5.2": { catalogProvider: "zai", catalogFamily: "glm", catalogName: "GLM 5.2" },
+    };
     const automation = {
       id: "wake_synthetic",
       name: "Start quota countdown",
@@ -603,8 +607,10 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
           case "refresh_local_account_quota": return structuredClone(localRuntime);
           case "refresh_all_local_account_quotas": return localRuntime.accounts.map((item) => ({ accountId: item.id, status: "succeeded" }));
           case "consume_local_reset_credit": {
+            if (input.resetCreditsError) throw { code: "upstream_error", message: input.resetCreditsError };
             const target = localRuntime.accounts.find((item) => item.id === String(args.accountId));
             if (target) target.quota.resetCreditsAvailable = Math.max(0, target.quota.resetCreditsAvailable - 1);
+            if (input.resetCreditsRefreshError) return { refreshed: false, refreshError: input.resetCreditsRefreshError };
             return { refreshed: true };
           }
           case "update_local_account": {
@@ -642,7 +648,7 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
             const target = localRuntime.gateway.models.find((model) => model.id === request.modelId);
             if (target) {
               const custom = request.inputMicroUsdPerMillion != null && request.cachedInputMicroUsdPerMillion != null && request.outputMicroUsdPerMillion != null;
-              const catalog = modelPrices[target.id.toLowerCase()] ?? { catalogRank: null, inputMicroUsdPerMillion: null, cachedInputMicroUsdPerMillion: null, outputMicroUsdPerMillion: null };
+              const catalog = modelPrices[target.id.toLowerCase()] ?? { inputMicroUsdPerMillion: null, cachedInputMicroUsdPerMillion: null, outputMicroUsdPerMillion: null };
               target.inputMicroUsdPerMillion = custom ? request.inputMicroUsdPerMillion : catalog.inputMicroUsdPerMillion;
               target.cachedInputMicroUsdPerMillion = custom ? request.cachedInputMicroUsdPerMillion : catalog.cachedInputMicroUsdPerMillion;
               target.cacheWrite5mMicroUsdPerMillion = custom ? request.cacheWrite5mMicroUsdPerMillion : null;
@@ -942,6 +948,7 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
           case "get_opencode_config_status": return { configured: false, modelCount: 0, hasBackup: false, backupCreatedAtMs: null, backupName: null, path: "C:\\Users\\Test\\.config\\opencode\\opencode.json" };
           case "create_opencode_snapshot": return true;
           case "connect_opencode_to_local_gateway": return { path: "C:\\Users\\Test\\.config\\opencode\\opencode.json", modelCount: 2, backupCreated: true };
+          case "launch_opencode_source": return { path: "C:\\Users\\Test\\.config\\opencode\\opencode.json", modelCount: source.models.length, backupCreated: true };
           case "restart_opencode_app":
           case "restore_opencode_config": return null;
           case "stop_managed_codex_profile": return true;
@@ -1088,14 +1095,15 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
           ? current?.reasoningAllowedLevels ?? reportedReasoning
           : [];
         const price = current?.customPrice
-          ? { catalogRank: current.catalogRank, inputMicroUsdPerMillion: current.inputMicroUsdPerMillion, cachedInputMicroUsdPerMillion: current.cachedInputMicroUsdPerMillion, cacheWrite5mMicroUsdPerMillion: current.cacheWrite5mMicroUsdPerMillion, cacheWrite1hMicroUsdPerMillion: current.cacheWrite1hMicroUsdPerMillion, outputMicroUsdPerMillion: current.outputMicroUsdPerMillion }
-          : modelPrices[id.toLowerCase()] ?? { catalogRank: null, inputMicroUsdPerMillion: null, cachedInputMicroUsdPerMillion: null, outputMicroUsdPerMillion: null };
+          ? { inputMicroUsdPerMillion: current.inputMicroUsdPerMillion, cachedInputMicroUsdPerMillion: current.cachedInputMicroUsdPerMillion, cacheWrite5mMicroUsdPerMillion: current.cacheWrite5mMicroUsdPerMillion, cacheWrite1hMicroUsdPerMillion: current.cacheWrite1hMicroUsdPerMillion, outputMicroUsdPerMillion: current.outputMicroUsdPerMillion }
+          : modelPrices[id.toLowerCase()] ?? { inputMicroUsdPerMillion: null, cachedInputMicroUsdPerMillion: null, outputMicroUsdPerMillion: null };
         return {
           id,
           enabled: current?.enabled ?? true,
           memberCount: modelMembers.filter((member) => member.models.some((model) => model.toLowerCase() === id.toLowerCase())).length,
           codexVisible: current?.enabled ?? true,
           codexDisplayName: id.replaceAll("-", " "),
+          ...(modelMetadata[id.toLowerCase()] ?? {}),
           ...price,
           imageRequestPrices: id.toLowerCase().includes("image") ? [
             { operation: "generation", quality: "low", size: "1024x1024", microUsd: 6000 },
@@ -1115,9 +1123,7 @@ export async function installTauriMock(page: Page, options: MockOptions = {}) {
           speedConfigurable: Object.prototype.hasOwnProperty.call(input.modelSpeed ?? {}, id.toLowerCase()),
         };
       });
-      runtime.gateway.models = input.serverModelOrder
-        ? models
-        : models.sort(compareModelOrder);
+      runtime.gateway.models = models;
       runtime.gateway.visibleModelIds = runtime.gateway.models.filter((model) => model.enabled).map((model) => model.id);
     }
 

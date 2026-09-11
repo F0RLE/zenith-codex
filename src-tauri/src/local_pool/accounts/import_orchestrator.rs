@@ -54,11 +54,10 @@ pub(in crate::local_pool::accounts) use errors::{
     model_failure_code, model_item_error, proxy_item_error, ImportItemError, ItemResult,
 };
 #[cfg(test)]
+pub(super) use identity::account_id_from_check_response;
+#[cfg(test)]
 pub(super) use identity::normalized_profile_account_id;
-pub(super) use identity::{
-    account_id_from_check_response, masked_account_identity, provider_identity_key,
-    timestamp_from_ms,
-};
+pub(super) use identity::{masked_account_identity, provider_identity_key, timestamp_from_ms};
 pub(in crate::local_pool::accounts) use persistence::persist_imported_account;
 pub(super) use policy::{
     account_auth_mode, account_model_state_is_valid, ensure_account_import_item,
@@ -81,9 +80,6 @@ pub(super) const MAX_ACCOUNT_LABEL_BYTES: usize = 128;
 pub(super) const MAX_MODELS: usize = 4_096;
 
 pub(super) const DEFAULT_OPENAI_SOURCE_URL: &str = "https://api.openai.com/v1";
-
-pub(super) const CODEX_ACCOUNT_CHECK_ENDPOINT: &str =
-    "https://chatgpt.com/backend-api/wham/accounts/check";
 
 pub(super) const MAX_ACCOUNT_PROFILE_RESPONSE_BYTES: usize = 256 * 1024;
 

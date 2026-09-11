@@ -166,10 +166,14 @@
 
 .profile-recovery {
   width: min(100%, 1040px);
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
+  align-content: center;
   gap: 20px;
-  margin: auto;
+  margin: 0 auto;
   padding: 28px 0;
+  box-sizing: border-box;
 }
 
 .profile-recovery.is-empty {

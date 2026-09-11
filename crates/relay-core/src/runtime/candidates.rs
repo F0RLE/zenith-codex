@@ -230,8 +230,16 @@ impl GatewayRuntime {
         health: CandidateHealth,
         quota: CandidateQuota,
     ) -> bool {
-        self.lock_scheduler()
-            .update_candidate_availability(candidate_id, enabled, health, quota)
+        let updated = self.lock_scheduler().update_candidate_availability(
+            candidate_id,
+            enabled,
+            health,
+            quota,
+        );
+        if updated {
+            self.candidate_availability.notify_waiters();
+        }
+        updated
     }
 
     pub fn update_candidate_availability_at(
@@ -242,13 +250,17 @@ impl GatewayRuntime {
         quota: CandidateQuota,
         quota_updated_at_ms: Option<u64>,
     ) -> bool {
-        self.lock_scheduler().update_candidate_availability_at(
+        let updated = self.lock_scheduler().update_candidate_availability_at(
             candidate_id,
             enabled,
             health,
             quota,
             quota_updated_at_ms,
-        )
+        );
+        if updated {
+            self.candidate_availability.notify_waiters();
+        }
+        updated
     }
 
     /// Applies source routing rules without rebuilding its HTTP executor.
@@ -426,8 +438,13 @@ impl GatewayRuntime {
     }
 
     pub fn set_candidate_health(&self, candidate_id: &str, health: CandidateHealth) -> bool {
-        self.lock_scheduler()
-            .set_candidate_health(candidate_id, health)
+        let updated = self
+            .lock_scheduler()
+            .set_candidate_health(candidate_id, health);
+        if updated {
+            self.candidate_availability.notify_waiters();
+        }
+        updated
     }
 
     pub fn remove_candidate(&self, candidate_id: &str) -> bool {
@@ -509,7 +526,11 @@ impl GatewayRuntime {
     }
 
     pub fn clear_candidate_cooldown(&self, candidate_id: &str, model: &str) -> bool {
-        self.lock_scheduler().clear_cooldown(candidate_id, model)
+        let updated = self.lock_scheduler().clear_cooldown(candidate_id, model);
+        if updated {
+            self.candidate_availability.notify_waiters();
+        }
+        updated
     }
 
     pub fn set_candidate_cooldown(
@@ -518,12 +539,21 @@ impl GatewayRuntime {
         model: &str,
         retry_at_ms: u64,
     ) -> bool {
-        self.lock_scheduler()
-            .set_cooldown(candidate_id, model, retry_at_ms)
+        let updated = self
+            .lock_scheduler()
+            .set_cooldown(candidate_id, model, retry_at_ms);
+        if updated {
+            self.candidate_availability.notify_waiters();
+        }
+        updated
     }
 
     pub fn reset_candidate_failures(&self, candidate_id: &str) -> bool {
-        self.lock_scheduler().reset_failures(candidate_id)
+        let updated = self.lock_scheduler().reset_failures(candidate_id);
+        if updated {
+            self.candidate_availability.notify_waiters();
+        }
+        updated
     }
 }
 

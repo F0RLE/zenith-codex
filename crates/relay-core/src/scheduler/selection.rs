@@ -904,6 +904,10 @@ impl PoolScheduler {
         self.response_affinity.invalidate(key)
     }
 
+    pub fn invalidate_prompt_affinity(&mut self, key: &str) -> bool {
+        self.prompt_affinity.invalidate(key)
+    }
+
     #[cfg(test)]
     pub(crate) fn reserve(&mut self, candidate_id: &str) -> bool {
         self.reserve_for(candidate_id, "", 0)

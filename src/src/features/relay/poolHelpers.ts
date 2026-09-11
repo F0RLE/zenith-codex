@@ -11,7 +11,7 @@ import {
   compareSubscriptionPlanPriority,
   type ApiSourceRole,
 } from "./routingOrder";
-import { groupModels, modelProviderGroupForDisplay, modelProviderGroupLabel } from "./modelGroups";
+import { groupModels } from "./modelGroups";
 
 export type PoolMember =
   | (AccountSummary & { kind: "account" })
@@ -135,7 +135,25 @@ export function modelSummaries(runtime: RuntimeSnapshot): ModelSummary[] {
     ).length,
     codexVisible: false,
     codexDisplayName: id,
-    catalogRank: null,
+    catalogProvider: null,
+    catalogFamily: null,
+    catalogName: null,
+    catalogReleaseDate: null,
+    catalogLastUpdated: null,
+    catalogStatus: null,
+    catalogReasoning: null,
+    catalogReasoningMethod: null,
+    catalogReasoningEffortLevels: [],
+    catalogDefaultReasoningEffort: null,
+    catalogToolCall: null,
+    catalogStructuredOutput: null,
+    catalogAttachment: null,
+    catalogOpenWeights: null,
+    catalogInputModalities: [],
+    catalogOutputModalities: [],
+    catalogContextLimit: null,
+    catalogInputLimit: null,
+    catalogOutputLimit: null,
     inputMicroUsdPerMillion: null,
     cachedInputMicroUsdPerMillion: null,
     cacheWrite5mMicroUsdPerMillion: null,
@@ -153,7 +171,7 @@ export function modelSummaries(runtime: RuntimeSnapshot): ModelSummary[] {
   }));
 }
 
-export function groupModelSummariesForLauncher(
+export function groupModelSummaries(
   models: ModelSummary[],
   accounts: AccountSummary[],
 ) {
@@ -162,41 +180,11 @@ export function groupModelSummariesForLauncher(
   );
   return groupModels(
     models,
-    (model) => model.id,
-    (model) => chatGptModelIds.has(model.id.toLowerCase()),
+    {
+      metadata: (model) => model,
+      isNativeChatGpt: (model) => chatGptModelIds.has(model.id.toLowerCase()),
+    },
   );
-}
-
-/** Rules editor ordering is operator-owned. Keep the catalog order supplied by
- * the backend instead of applying launcher presentation sorting. */
-export function groupModelSummariesForRules(
-  models: ModelSummary[],
-  accounts: AccountSummary[],
-) {
-  const nativeIds = new Set(
-    accounts.flatMap((account) => account.models.map((model) => model.toLowerCase())),
-  );
-  const groups = new Map<string, ModelSummary[]>();
-  for (const model of models) {
-    const id = modelProviderGroupForDisplay(model.id, nativeIds.has(model.id.toLowerCase()));
-    const items = groups.get(id);
-    if (items) items.push(model);
-    else groups.set(id, [model]);
-  }
-  const groupOrder = (id: string) => {
-    if (id === "chatgpt") return 0;
-    if (id === "openai") return 1;
-    if (id === "anthropic") return 2;
-    if (id.startsWith("provider-")) return 3;
-    return 4;
-  };
-  return [...groups.entries()]
-    .sort(([left], [right]) => groupOrder(left) - groupOrder(right))
-    .map(([id, items]) => ({
-      id,
-      label: modelProviderGroupLabel(id as Parameters<typeof modelProviderGroupLabel>[0]),
-      items,
-    }));
 }
 
 export function comparePoolMembers(

@@ -43,10 +43,6 @@ pub fn delete_saved_app_key() -> Result<(), String> {
     delete_named_secret_result(KEYRING_USER)
 }
 
-pub fn save_previous_codex_auth(content: &str) -> Result<(), String> {
-    save_named_secret(PREVIOUS_AUTH_USER, content)
-}
-
 pub fn load_previous_codex_auth() -> Option<String> {
     load_named_secret(PREVIOUS_AUTH_USER)
 }

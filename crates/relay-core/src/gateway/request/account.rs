@@ -53,7 +53,15 @@ pub(in crate::gateway) async fn responses_compact(
             "invalid_request",
         );
     };
-    let Some(resolved_model) = runtime.resolve_visible_account_model(&key, &requested_model) else {
+    let resolved_model = runtime
+        .resolve_visible_account_model(&key, &requested_model)
+        .or_else(|| {
+            runtime
+                .chatgpt_retry_until_available()
+                .then(|| runtime.resolve_configured_account_model(&key, &requested_model))
+                .flatten()
+        });
+    let Some(resolved_model) = resolved_model else {
         return api_error(
             StatusCode::NOT_FOUND,
             "model is not available in this managed pool",
@@ -70,6 +78,9 @@ pub(in crate::gateway) async fn responses_compact(
     }
     let response_affinity_key =
         runtime.response_affinity_key(request.get("previous_response_id").and_then(Value::as_str));
+    // The endpoint is ChatGPT-specific. Keep eligibility with the request and
+    // read the mutable retry setting in the execution loop.
+    let wait_for_candidate_availability = true;
     normalize_account_request(&mut request, responses_lite.is_some());
     request.remove("stream");
     execute_account_endpoint(AccountExecution {
@@ -83,6 +94,7 @@ pub(in crate::gateway) async fn responses_compact(
         responses_lite,
         response_affinity_key,
         rewrite_model: true,
+        wait_for_candidate_availability,
     })
     .await
 }
@@ -123,7 +135,15 @@ pub(in crate::gateway) async fn alpha_search(
             "no_eligible_source",
         );
     };
-    let Some(resolved_model) = runtime.resolve_visible_account_model(&key, &requested_model) else {
+    let resolved_model = runtime
+        .resolve_visible_account_model(&key, &requested_model)
+        .or_else(|| {
+            runtime
+                .chatgpt_retry_until_available()
+                .then(|| runtime.resolve_configured_account_model(&key, &requested_model))
+                .flatten()
+        });
+    let Some(resolved_model) = resolved_model else {
         return api_error(
             StatusCode::NOT_FOUND,
             "model is not available in this managed pool",
@@ -133,6 +153,9 @@ pub(in crate::gateway) async fn alpha_search(
     if !model_was_provided {
         request.remove("model");
     }
+    // The endpoint is ChatGPT-specific. Keep eligibility with the request and
+    // read the mutable retry setting in the execution loop.
+    let wait_for_candidate_availability = true;
     request.remove("prompt_cache_key");
     request.remove("prompt_cache_retention");
     if let Some(session_id) = request
@@ -160,6 +183,7 @@ pub(in crate::gateway) async fn alpha_search(
         responses_lite: None,
         response_affinity_key: None,
         rewrite_model: model_was_provided,
+        wait_for_candidate_availability,
     })
     .await
 }

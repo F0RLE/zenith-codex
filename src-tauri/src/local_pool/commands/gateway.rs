@@ -59,6 +59,12 @@ pub struct SetCodexWebsocketsInput {
     enabled: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetChatgptRetryUntilAvailableInput {
+    enabled: bool,
+}
+
 #[tauri::command]
 pub async fn start_local_gateway(
     app: AppHandle,
@@ -226,6 +232,27 @@ pub async fn set_local_codex_background_tasks(
     state.store()?.replace_gateway(gateway)?;
     if let Some(runtime) = state.gateway.runtime().await {
         runtime.set_codex_background_tasks_enabled(input.enabled);
+    }
+    state.snapshot().await.map_err(Into::into)
+}
+
+/// Updates the ChatGPT-only retry policy without rebuilding the gateway.
+/// Existing candidate rotation, cooldowns, health state, and affinity remain
+/// owned by the running runtime and are observed by new and waiting requests.
+#[tauri::command]
+pub async fn set_local_chatgpt_retry_until_available(
+    input: SetChatgptRetryUntilAvailableInput,
+    state: State<'_, DesktopState>,
+) -> Result<LocalPoolSnapshot, CommandError> {
+    let _mutation = state.setup_guard().await;
+    let mut gateway = state.store()?.gateway().clone();
+    if gateway.chatgpt_retry_until_available == input.enabled {
+        return state.snapshot().await.map_err(Into::into);
+    }
+    gateway.chatgpt_retry_until_available = input.enabled;
+    state.store()?.replace_gateway(gateway)?;
+    if let Some(runtime) = state.gateway.runtime().await {
+        runtime.set_chatgpt_retry_until_available(input.enabled);
     }
     state.snapshot().await.map_err(Into::into)
 }

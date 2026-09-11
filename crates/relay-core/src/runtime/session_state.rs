@@ -181,6 +181,34 @@ impl GatewayRuntime {
         )))
     }
 
+    pub(crate) fn tool_call_affinity_key(
+        &self,
+        local_key_id: &str,
+        call_id: &str,
+    ) -> Option<String> {
+        let local_key_id = local_key_id.trim();
+        let call_id = call_id.trim();
+        if local_key_id.is_empty() || call_id.is_empty() || call_id.len() > 256 {
+            return None;
+        }
+        Some(format!(
+            "tool:{}",
+            hex::encode(Sha256::digest(
+                format!("tool\0{local_key_id}\0{call_id}").as_bytes(),
+            ))
+        ))
+    }
+
+    pub(crate) fn has_response_affinity_binding(&self, key: &str, now_ms: u64) -> bool {
+        if self.lock_scheduler().has_response_affinity(key, now_ms) {
+            return true;
+        }
+        self.response_affinity_store
+            .as_ref()
+            .and_then(|store| store.find(key, now_ms).ok().flatten())
+            .is_some()
+    }
+
     pub(crate) fn prompt_affinity_key(
         &self,
         local_key_id: &str,
@@ -244,18 +272,46 @@ impl GatewayRuntime {
         now_ms: u64,
     ) {
         if let Some(key) = self.response_affinity_key(response_id) {
-            if self
-                .lock_scheduler()
-                .bind_response_affinity(key.clone(), candidate_id, now_ms)
-            {
-                self.persist_response_affinity(&key, candidate_id, now_ms);
-            }
+            self.bind_affinity_key(&key, candidate_id, now_ms);
+        }
+    }
+
+    pub(crate) fn bind_tool_call_affinity(
+        &self,
+        local_key_id: &str,
+        call_id: &str,
+        candidate_id: &str,
+        now_ms: u64,
+    ) {
+        if let Some(key) = self.tool_call_affinity_key(local_key_id, call_id) {
+            self.bind_affinity_key(&key, candidate_id, now_ms);
+        }
+    }
+
+    fn bind_affinity_key(&self, key: &str, candidate_id: &str, now_ms: u64) {
+        if self
+            .lock_scheduler()
+            .bind_response_affinity(key.to_string(), candidate_id, now_ms)
+        {
+            self.persist_response_affinity(key, candidate_id, now_ms);
         }
     }
 
     pub(crate) fn invalidate_response_affinity(&self, key: Option<&str>) -> bool {
         key.is_some_and(|key| {
             let invalidated = self.lock_scheduler().invalidate_response_affinity(key);
+            if invalidated {
+                if let Some(store) = self.response_affinity_store.as_ref() {
+                    let _ = store.delete(key);
+                }
+            }
+            invalidated
+        })
+    }
+
+    pub(crate) fn invalidate_prompt_affinity(&self, key: Option<&str>) -> bool {
+        key.is_some_and(|key| {
+            let invalidated = self.lock_scheduler().invalidate_prompt_affinity(key);
             if invalidated {
                 if let Some(store) = self.response_affinity_store.as_ref() {
                     let _ = store.delete(key);

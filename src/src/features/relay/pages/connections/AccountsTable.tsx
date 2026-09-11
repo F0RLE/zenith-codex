@@ -15,7 +15,6 @@ import {
   Loader2,
   LogIn,
   Network,
-  Pencil,
   Play,
   Power,
   RefreshCw,
@@ -53,6 +52,7 @@ import {
   useConfirm,
 } from "../../components/Ui";
 import { AccountValueStrip } from "../../components/AccountValueStrip";
+import { AccountProviderQuotaStrip } from "../../components/AccountProviderQuotaStrip";
 import { ResetCreditsControl } from "../../components/ResetCreditsControl";
 import { formatDetailedRemainingTime, isFastSupplementalQuota } from "../../quotaFormatting";
 import { routingOrderPositions, runtimeCandidateForMember, upcomingModelRetries } from "../../routingOrder";
@@ -259,18 +259,32 @@ export function AccountsTable({ query, onQuery, canImport, canManageProxies, can
     () => refreshOneAccountQuota(mode, account.id),
     "feedback.refreshed",
   );
+  const forceRefreshAccountCredentials = (account: AccountSummary) => perform(
+    `connection-account-credentials-${account.id}`,
+    async () => {
+      const result = await relayCommands.forceRefreshAccountCredentials(account.id);
+      if (result.status !== "refreshed") {
+        const code = result.status === "requires_reauth"
+          ? "credential_refresh_requires_reauth"
+          : "credential_refresh_retryable";
+        throw { code, message: t(`errors.${code}`), reason: result.code, retryable: result.status === "retryable_failure" };
+      }
+      return result;
+    },
+    "feedback.credentialsRefreshed",
+  );
   return (
     <>
     <div className="connections-account-controls">
     <div className="account-command-bar">
       <div className="account-command-context">
-        <input type="checkbox" aria-label={t("accounts.selectAll")} title={t("accounts.selectAll")} checked={allSelected} disabled={!accounts.length} onChange={(event) => toggleAllVisible(event.target.checked)} />
+        <input type="checkbox" aria-label={t("accounts.selectAll")} data-relay-tooltip={t("accounts.selectAll")} checked={allSelected} disabled={!accounts.length} onChange={(event) => toggleAllVisible(event.target.checked)} />
         {selectedCount ? <span>{t("accounts.selectedCount", { count: selectedCount })}</span> : <label className="search-field account-search"><span className="sr-only">{t("common.search")}</span><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t("common.search")} /></label>}
       </div>
       {!selectedCount ? <div className="account-filter-stack">
         <OptionMenu className="account-filter-menu" label={t("accounts.filterByParticipation")} value={participationFilter} options={participationOptions} onChange={(value) => { setSelected([]); setParticipationFilter(value as ParticipationFilter); }} />
         {plans.length > 1 ? <OptionMenu className="account-filter-menu" label={t("accounts.filterByPlan")} value={activePlan} options={planFilterOptions} onChange={(value) => { setSelected([]); setPlanFilter(value); }} /> : null}
-        {allAccounts.length > 1 ? <Button className="account-group-toggle" variant="secondary" icon={<Layers3 aria-hidden />} title={t("accounts.groupByPlan")} aria-label={t("accounts.groupByPlan")} aria-pressed={groupByPlan} onClick={togglePlanGrouping}>{t("accounts.groupByPlan")}</Button> : null}
+        {allAccounts.length > 1 ? <Button className="account-group-toggle" variant="secondary" icon={<Layers3 aria-hidden />} aria-label={t("accounts.groupByPlan")} aria-pressed={groupByPlan} onClick={togglePlanGrouping}>{t("accounts.groupByPlan")}</Button> : null}
       </div> : null}
       <div className="account-command-actions">
         {selectedCount ? <>
@@ -344,6 +358,7 @@ export function AccountsTable({ query, onQuery, canImport, canManageProxies, can
         const proxyLabel = account.proxyAvailable === false && account.proxyMode === "direct" ? t("proxies.modes.blocked") : t(`proxies.modes.${account.proxyMode ?? "direct"}`);
         const poolActionLabel = participates ? t("accounts.excludeFromPool") : t("accounts.includeInPool");
         const quotaStatus = accountQuotaRefreshState(account);
+        const clientAuthWarning = account.clientAuthStatus === "login_required";
         const displayedErrorCode = quotaStatus === "refreshing" ? null : errorCode;
         const indicatorTone = onServer
           ? "info"
@@ -353,11 +368,13 @@ export function AccountsTable({ query, onQuery, canImport, canManageProxies, can
             ? "disabled"
             : quotaStatus === "failed" || quotaStatus === "requires_reauth"
               ? "error"
+              : clientAuthWarning
+                ? "warning"
               : quotaStatus === "pending"
                 ? "disabled"
                 : runtimeTone ?? operationalStatusTone(operationalStatus);
         const statusIndicatorLabel = quotaStatus === "updated" ? operationalLabel : `${t(`accounts.quotaRefreshStatus.${quotaStatus}`)} · ${operationalLabel}`;
-        const indicatorLabel = runtimeHint ? `${statusIndicatorLabel} · ${runtimeHint}` : statusIndicatorLabel;
+        const indicatorLabel = `${clientAuthWarning ? `${t("accounts.clientAuthWarning")} · ` : ""}${runtimeHint ? `${statusIndicatorLabel} · ${runtimeHint}` : statusIndicatorLabel}`;
         const selectedAccount = selected.includes(account.id);
         return <Fragment key={account.id}>
         {groupByPlan && plan.id !== previousPlan ? <div className="account-plan-group-heading" role="presentation"><AccountPlanBadge planType={account.subscription.planType} unknown={t("common.unknown")} /><span>{t("accounts.groupCount", { count: visiblePlanCounts.get(plan.id) ?? 0 })}</span></div> : null}
@@ -367,15 +384,17 @@ export function AccountsTable({ query, onQuery, canImport, canManageProxies, can
               ? <IconButton className="account-kind-icon account-status-button" data-status="error" label={accountErrorLabel(displayedErrorCode, t)} icon={<UserRound aria-hidden />} onClick={() => setErrorDetails(account)} />
               : <StatusIcon className="account-kind-icon" status={indicatorTone} label={indicatorLabel}><UserRound aria-hidden /></StatusIcon>}
             <div className="account-identity">
-              <strong className={accountIdentitiesVisible ? "revealed" : undefined} title={account.label}>{account.label}</strong>
+              <strong className={accountIdentitiesVisible ? "revealed" : undefined} data-relay-tooltip={account.label}>{account.label}</strong>
               <div className="account-identity-meta"><AccountPlanBadge planType={account.subscription.planType} unknown={t("common.unknown")} /></div>
             </div>
             <div className="account-card-header-actions">
               <ActionMenu className="account-row-menu">
                 {errorCode ? <ActionMenuItem icon={<CircleAlert aria-hidden />} onClick={() => setErrorDetails(account)}>{t("accounts.errorDetailsTitle")}</ActionMenuItem> : null}
                 {mode === "local" && requiresAccountReauthentication(account) ? <ActionMenuItem icon={<LogIn aria-hidden />} onClick={() => onReauthenticate(account)}>{t("accounts.reauthenticate")}</ActionMenuItem> : null}
+                {mode === "local" && account.secretAvailable ? <ActionMenuItem icon={<RefreshCw aria-hidden />} disabled={Boolean(busy)} onClick={() => void forceRefreshAccountCredentials(account)}>{t("accounts.forceRefreshCredentials")}</ActionMenuItem> : null}
                 {onServer ? <ActionMenuItem icon={<Download aria-hidden />} disabled={Boolean(busy)} onClick={() => void returnToComputer(account)}>{t("accounts.returnToComputer")}</ActionMenuItem> : null}
                 {onServer ? <ActionMenuItem danger icon={<Power aria-hidden />} disabled={Boolean(busy)} onClick={() => void recoverLocally(account)}>{t("accounts.forceActivateLocal")}</ActionMenuItem> : null}
+                <ActionMenuItem icon={<Network aria-hidden />} disabled={onServer || !canManageProxies} onClick={() => onProxy(account)}>{t("proxies.proxy")}: {proxyLabel}</ActionMenuItem>
                 <ActionMenuItem icon={<Download aria-hidden />} disabled={!canExport || !account.secretAvailable} onClick={() => onExport([account.id])}>{t("accounts.exportOne", { name: account.label })}</ActionMenuItem>
                 {!onServer ? <ActionMenuItem icon={<Power aria-hidden />} onClick={() => { void perform(`enable-${account.id}`, () => mode === "local" ? relayCommands.setAccountEnabled(account.id, !account.enabled) : relayCommands.remoteAction({ type: "update_account", id: account.id }, { enabled: !account.enabled }), "feedback.saved"); }}>{account.enabled ? t("common.disable") : t("common.enable")}</ActionMenuItem> : null}
                 <ActionMenuItem danger icon={<Trash2 aria-hidden />} onClick={() => void confirm(t(onServer ? "accounts.deleteLocalRecoveryConfirm" : mode === "remote" ? "accounts.deleteRemoteConfirm" : "accounts.deleteConfirm"), { danger: true }).then((accepted) => accepted && perform(`delete-${account.id}`, () => mode === "local" ? relayCommands.deleteAccount(account.id) : relayCommands.remoteAction({ type: "delete_account", id: account.id }), "feedback.deleted"))}>{t("common.delete")}</ActionMenuItem>
@@ -385,17 +404,17 @@ export function AccountsTable({ query, onQuery, canImport, canManageProxies, can
           </div>
           <div className="account-card-quota compact-quota-layout">
             {accountHasQuotaWindows(account) ? <QuotaStack snapshot={account.quota} nowMs={nowMs} concise /> : <AccountQuotaRefreshState account={account} />}
+            <AccountProviderQuotaStrip account={account} />
             {mode === "local" ? <ResetCreditsControl account={account} onCompleted={() => refresh()} /> : null}
           </div>
-          <div className={`account-subscription-line${subscriptionEnded ? " expired" : ""}`} title={[subscriptionEnd.date, subscriptionEnd.relative].filter(Boolean).join(" · ")}><CalendarDays aria-hidden /><span>{subscriptionEnd.date}</span>{subscriptionEnd.relative ? <><span className="account-subscription-separator" aria-hidden>·</span><span className="account-subscription-countdown">{subscriptionEnd.relative}</span></> : null}</div>
-          {runtimeHint ? <div className="account-runtime-line" data-warning={modelRetries.length > 0} title={runtimeHint}><Clock3 aria-hidden /><span>{runtimeHint}</span></div> : null}
+          <div className={`account-subscription-line${subscriptionEnded ? " expired" : ""}`}><CalendarDays aria-hidden /><span>{subscriptionEnd.date}</span>{subscriptionEnd.relative ? <><span className="account-subscription-separator" aria-hidden>·</span><span className="account-subscription-countdown">{subscriptionEnd.relative}</span></> : null}</div>
+          {runtimeHint ? <div className="account-runtime-line" data-warning={modelRetries.length > 0}><Clock3 aria-hidden /><span>{runtimeHint}</span></div> : null}
           {accountValueVisible ? <AccountValueStrip account={account} /> : null}
           <footer className="account-card-footer"><div className="account-card-actions">
             {onServer
               ? <IconButton label={t("accounts.onServerHint")} icon={<Server aria-hidden />} disabled />
               : <IconButton className={participates ? "danger" : ""} label={poolActionLabel} icon={participates ? <ListMinus aria-hidden /> : <ListPlus aria-hidden />} disabled={busy === `pool-${account.id}`} onClick={() => void perform(`pool-${account.id}`, () => updateParticipation(account, !participates), "feedback.saved")} />}
             <IconButton label={t("accounts.refreshQuota")} icon={busy === `connection-account-quota-${account.id}` ? <Loader2 className="spin" aria-hidden /> : <RefreshCw aria-hidden />} disabled={!canRefreshQuota || !account.secretAvailable || Boolean(busy)} onClick={() => void refreshAccountQuota(account)} />
-            <IconButton label={`${t("proxies.proxy")}: ${proxyLabel}`} icon={<Pencil aria-hidden />} disabled={onServer || !canManageProxies} onClick={() => onProxy(account)} />
             {mode === "local" ? <IconButton label={t("accounts.launchAccount")} icon={<Play aria-hidden />} disabled={onServer || !account.secretAvailable || busy === `launch-account-${account.id}`} title={onServer ? t("accounts.onServerHint") : !account.secretAvailable ? t("accounts.credentialsUnavailable") : t("accounts.launchAccount")} onClick={() => void activateCodexProfile(`launch-account-${account.id}`, () => relayCommands.launchCodexAccount(account.id), true)} /> : null}
           </div></footer>
         </article>

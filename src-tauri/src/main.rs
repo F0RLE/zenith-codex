@@ -8,6 +8,7 @@ mod local_pool;
 mod platform;
 mod portable_update;
 mod ready_api;
+mod storage_paths;
 mod tray;
 
 fn main() {

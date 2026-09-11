@@ -6,7 +6,7 @@ mod snapshot;
 
 pub(crate) use adapters::DesktopOAuthEvents;
 use coordination::wake_coordinator;
-pub(crate) use paths::migrate_recovery_layout;
+pub(crate) use paths::migrate_storage_layout;
 pub(crate) use snapshot::LocalRuntimeInputs;
 #[cfg(test)]
 use snapshot::{account_secret_available, SecretLookup};
@@ -20,15 +20,18 @@ use super::{
     profiles::repair,
     store::{telemetry_db::TelemetryDb, LocalPoolStore},
 };
+use crate::storage_paths::StoragePaths;
 use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{atomic::AtomicU64, Arc, Mutex, MutexGuard},
 };
 use tokio::sync::{watch, Mutex as AsyncMutex, Notify};
+use url::Url;
 use zenith_relay_core::{
     accounts::TokenAuthority,
     automations::WakeCoordinator,
+    model_metadata::{ModelMetadataCatalog, ModelMetadataCatalogLoader},
     pricing::{CatalogStatus, PricingCatalog, PricingCatalogLoader},
     quota::QuotaRefreshQueue,
 };
@@ -39,12 +42,15 @@ pub(super) use zenith_relay_core::unix_time_ms as now_ms;
 use zenith_relay_core::DefaultServiceTier;
 
 const MAX_QUOTA_REFRESH_ENTRIES: usize = crate::local_pool::models::MAX_LOCAL_ACCOUNTS;
+const DEFAULT_CODEX_ACCOUNT_CHECK_ENDPOINT: &str =
+    "https://chatgpt.com/backend-api/wham/accounts/check";
 
 pub struct DesktopState {
     pub(crate) root: PathBuf,
     pub(crate) gateway: GatewayManager,
     pub(crate) telemetry: Arc<TelemetryDb>,
     pricing: Arc<PricingCatalogLoader>,
+    model_metadata: Arc<ModelMetadataCatalogLoader>,
     store: Arc<Mutex<LocalPoolStore>>,
     token_authority: Arc<TokenAuthority>,
     quota_refresh: Arc<Mutex<QuotaRefreshQueue>>,
@@ -60,12 +66,14 @@ pub struct DesktopState {
     quota_account_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     subscription_refresh_lock: AsyncMutex<()>,
     setup_lock: tokio::sync::Mutex<()>,
+    account_check_url: Url,
 }
 
 impl DesktopState {
     pub fn open(root: PathBuf) -> Result<Self> {
-        let transient_root = root.join("cache");
-        let history_repair_root = root.join("recovery").join("history-repair");
+        let paths = StoragePaths::from_root(&root);
+        let transient_root = paths.cache_root();
+        let history_repair_root = paths.history_repair_backup_root();
         let _ = std::thread::Builder::new()
             .name("transient-cleanup".to_string())
             .spawn(move || {
@@ -77,7 +85,11 @@ impl DesktopState {
         let mut store = LocalPoolStore::open(root.clone())?;
         let telemetry = store.database();
         let pricing = Arc::new(
-            PricingCatalogLoader::open(root.join("data").join("litellm-prices.json"))
+            PricingCatalogLoader::open(paths.pricing_catalog_file())
+                .map_err(|error| LocalPoolError::new(ErrorCode::Io, error.to_string()))?,
+        );
+        let model_metadata = Arc::new(
+            ModelMetadataCatalogLoader::open(paths.model_metadata_catalog_file())
                 .map_err(|error| LocalPoolError::new(ErrorCode::Io, error.to_string()))?,
         );
         let mut quota_refresh = QuotaRefreshQueue::new(MAX_QUOTA_REFRESH_ENTRIES)
@@ -108,7 +120,7 @@ impl DesktopState {
         );
         let oauth_events = DesktopOAuthEvents::default();
         let oauth_flow = OAuthFlowManager::new(
-            root.join("cache"),
+            paths.cache_root(),
             NativeSecretBackend,
             oauth_events.clone(),
         );
@@ -117,6 +129,7 @@ impl DesktopState {
             gateway: GatewayManager::default(),
             telemetry,
             pricing,
+            model_metadata,
             store: Arc::new(Mutex::new(store)),
             token_authority,
             quota_refresh: Arc::new(Mutex::new(quota_refresh)),
@@ -132,6 +145,8 @@ impl DesktopState {
             quota_account_locks: Arc::new(Mutex::new(HashMap::new())),
             subscription_refresh_lock: AsyncMutex::new(()),
             setup_lock: tokio::sync::Mutex::new(()),
+            account_check_url: Url::parse(DEFAULT_CODEX_ACCOUNT_CHECK_ENDPOINT)
+                .expect("the built-in account-check endpoint must be valid"),
         })
     }
 
@@ -155,6 +170,14 @@ impl DesktopState {
 
     pub(crate) fn pricing_status(&self) -> CatalogStatus {
         self.pricing.status()
+    }
+
+    pub(crate) fn model_metadata_loader(&self) -> Arc<ModelMetadataCatalogLoader> {
+        self.model_metadata.clone()
+    }
+
+    pub(crate) fn model_metadata_catalog(&self) -> Arc<ModelMetadataCatalog> {
+        self.model_metadata.snapshot()
     }
 
     pub(crate) fn record_performance(
@@ -183,6 +206,15 @@ impl DesktopState {
 
     pub async fn setup_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.setup_lock.lock().await
+    }
+
+    pub(crate) fn account_check_url(&self) -> &Url {
+        &self.account_check_url
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_account_check_url_for_test(&mut self, endpoint: Url) {
+        self.account_check_url = endpoint;
     }
 
     pub(crate) fn quota_account_lock(&self, account_id: &str) -> Result<Arc<AsyncMutex<()>>> {
@@ -488,6 +520,7 @@ mod tests {
             source_id: "source_1".into(),
             candidate_id: Some("source_1".into()),
             account_id: None,
+            account_token_generation: None,
             client_context_id: None,
             routing: None,
             requested_model: Some("gpt-test".into()),
@@ -598,6 +631,59 @@ mod tests {
     }
 
     #[test]
+    fn delayed_unauthorized_does_not_expire_a_newer_oauth_login() {
+        let root = temp_root("usage-delayed-401");
+        let account_id = format!("account-{}", uuid::Uuid::new_v4().simple());
+        let state = DesktopState::open(root.clone()).unwrap();
+        let mut account = account_record(&account_id);
+        account.account.token_generation = 2;
+        state.store().unwrap().upsert_account(account).unwrap();
+        let credentials = CredentialStore::from_backend(NativeSecretBackend);
+        credentials
+            .save(
+                &StoredCodexCredentials::new(
+                    &account_id,
+                    "newer-access-private".into(),
+                    Some("newer-refresh-private".into()),
+                    Some("newer-id-private".into()),
+                    Some(u64::MAX),
+                    2,
+                    2,
+                    None,
+                    Some("provider-private".into()),
+                    None,
+                    None,
+                    None,
+                    false,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        // This result belongs to the immediately preceding credential
+        // generation, not the just-completed sign-in above.
+        (state.usage_callback())(account_status_event(
+            &account_id,
+            401,
+            Some("*"),
+            Some(now_ms().saturating_add(30 * 60_000)),
+            1,
+        ));
+
+        let stored = credentials.require(&account_id).unwrap();
+        assert_eq!(stored.generation(), 2);
+        assert!(stored.is_access_usable(now_ms(), 0));
+        let account = state.store().unwrap().account(&account_id).unwrap().clone();
+        assert_eq!(account.account.auth_state, AccountAuthState::Active);
+        assert_eq!(account.account.health, AccountHealthState::Healthy);
+        assert_eq!(account.account.last_error_code, None);
+
+        drop(state);
+        credentials.delete(&account_id).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn forbidden_account_is_blocked_until_an_actual_success() {
         let root = temp_root("usage-403");
         let account_id = "account-forbidden";
@@ -662,6 +748,7 @@ mod tests {
             100,
             None,
             None,
+            false,
         ));
 
         let mut late_success = account_success_event("account-race");
@@ -672,6 +759,7 @@ mod tests {
             200,
             None,
             Some(AccountAuthState::Active),
+            false,
         ));
         let older_failure = account_status_event("account-race", 429, Some("*"), Some(300), 1);
         assert!(apply_account_usage_state(
@@ -680,6 +768,7 @@ mod tests {
             250,
             None,
             None,
+            false,
         ));
 
         assert!(account.cooldowns.is_empty());
@@ -704,6 +793,7 @@ mod tests {
             100,
             None,
             None,
+            false,
         ));
         assert_eq!(account.account.health, AccountHealthState::Healthy);
         assert_eq!(account.account.last_error_code, None);
@@ -723,6 +813,7 @@ mod tests {
             100,
             None,
             None,
+            false,
         ));
         assert_eq!(account.account.health, AccountHealthState::Degraded);
         assert_eq!(
@@ -755,6 +846,7 @@ mod tests {
                 100,
                 None,
                 None,
+                false,
             ));
             assert_eq!(account.account.health, expected_health);
             assert_eq!(account.account.last_error_code.as_deref(), expected_error);
@@ -1103,6 +1195,8 @@ mod tests {
             weight: 1,
             cooldowns: Default::default(),
             consecutive_failures: 0,
+            client_auth_status: None,
+            last_client_login_redirect_at_ms: None,
         }
     }
 
@@ -1157,6 +1251,7 @@ mod tests {
             source_id: "openai_codex".into(),
             candidate_id: Some("account-1".into()),
             account_id: Some("account-1".into()),
+            account_token_generation: None,
             client_context_id: None,
             routing: None,
             requested_model: Some("gpt-test".into()),
@@ -1201,6 +1296,7 @@ mod tests {
             source_id: "openai_codex".into(),
             candidate_id: Some(account_id.into()),
             account_id: Some(account_id.into()),
+            account_token_generation: Some(1),
             client_context_id: None,
             routing: None,
             requested_model: Some("gpt-test".into()),

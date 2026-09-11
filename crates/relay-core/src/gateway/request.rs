@@ -13,9 +13,9 @@ use codex_models::{
     build_codex_models_response_with_source_reasoning,
 };
 pub(super) use headers::{
-    apply_codex_routing_hint, client_context_fingerprint, forwarded_bridge_gemini_headers,
-    forwarded_bridge_messages_headers, forwarded_codex_headers, forwarded_messages_headers,
-    is_managed_codex_client,
+    apply_codex_routing_hint, client_context_fingerprint, codex_client_version,
+    forwarded_bridge_gemini_headers, forwarded_bridge_messages_headers, forwarded_codex_headers,
+    forwarded_messages_headers, is_managed_codex_client,
 };
 #[cfg(test)]
 pub(super) use normalization::{apply_default_service_tier_if_missing, request_service_tier};
@@ -252,6 +252,127 @@ pub(super) fn contains_tool_call_output(value: &Value) -> bool {
     }
 }
 
+/// Returns the stable ids carried by Responses tool outputs. These ids are
+/// stateful when the matching call is not included in the same request: the
+/// provider that emitted the call is then the only safe owner. Keep this
+/// extraction bounded and do not retain the tool payload itself.
+pub(super) fn tool_call_output_ids(value: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    collect_tool_call_output_ids(value, &mut ids);
+    ids
+}
+
+fn collect_tool_call_output_ids(value: &Value, ids: &mut Vec<String>) {
+    if ids.len() >= 16 {
+        return;
+    }
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_tool_call_output_ids(item, ids)),
+        Value::Object(object) => {
+            let kind = object.get("type").and_then(Value::as_str);
+            if kind
+                .is_some_and(|kind| kind == "tool_search_output" || kind.ends_with("_call_output"))
+            {
+                if let Some(call_id) = bounded_tool_call_id(object.get("call_id")) {
+                    if !ids.iter().any(|known| known == &call_id) {
+                        ids.push(call_id);
+                    }
+                }
+            }
+            object
+                .values()
+                .for_each(|item| collect_tool_call_output_ids(item, ids));
+        }
+        _ => {}
+    }
+}
+
+/// Returns tool-call ids from a successful Responses response. Binding these
+/// ids lets the next request remain on the candidate that created the call,
+/// even when a client changes the selected model between turns.
+pub(super) fn response_tool_call_ids(value: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    collect_response_tool_call_ids(value, &mut ids);
+    ids
+}
+
+/// Drops incomplete Responses tool-call items from an imported conversation
+/// history. This is only safe after an upstream has explicitly rejected the
+/// missing result: Relay must never invent a tool output or remove a completed
+/// tool turn during normal request processing.
+pub(super) fn drop_unpaired_responses_tool_calls(request: &mut Value) -> bool {
+    let Some(input) = request.get_mut("input").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let output_ids = input
+        .iter()
+        .filter_map(response_tool_output_call_id)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let original_len = input.len();
+    input.retain(|item| {
+        response_tool_call_call_id(item)
+            .is_none_or(|call_id| output_ids.iter().any(|output_id| output_id == call_id))
+    });
+    input.len() != original_len
+}
+
+fn response_tool_output_call_id(item: &Value) -> Option<&str> {
+    let object = item.as_object()?;
+    let kind = object.get("type")?.as_str()?;
+    (kind == "tool_search_output" || kind.ends_with("_call_output"))
+        .then(|| object.get("call_id"))
+        .flatten()
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|call_id| !call_id.is_empty() && call_id.len() <= 256)
+}
+
+fn response_tool_call_call_id(item: &Value) -> Option<&str> {
+    let object = item.as_object()?;
+    let kind = object.get("type")?.as_str()?;
+    (kind == "function_call" || kind.ends_with("_call"))
+        .then(|| object.get("call_id"))
+        .flatten()
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|call_id| !call_id.is_empty() && call_id.len() <= 256)
+}
+
+fn collect_response_tool_call_ids(value: &Value, ids: &mut Vec<String>) {
+    if ids.len() >= 16 {
+        return;
+    }
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_response_tool_call_ids(item, ids)),
+        Value::Object(object) => {
+            let kind = object.get("type").and_then(Value::as_str);
+            if kind.is_some_and(|kind| kind == "function_call" || kind.ends_with("_call")) {
+                for field in ["call_id", "id"] {
+                    if let Some(call_id) = bounded_tool_call_id(object.get(field)) {
+                        if !ids.iter().any(|known| known == &call_id) {
+                            ids.push(call_id);
+                        }
+                    }
+                }
+            }
+            object
+                .values()
+                .for_each(|item| collect_response_tool_call_ids(item, ids));
+        }
+        _ => {}
+    }
+}
+
+fn bounded_tool_call_id(value: Option<&Value>) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    (!value.is_empty() && value.len() <= 256).then(|| value.to_string())
+}
+
 pub(super) fn tool_use_diagnostics(value: &Value) -> ToolUseDiagnostics {
     ToolUseDiagnostics {
         client_tool_count: tool_definition_count(value),
@@ -420,8 +541,8 @@ pub(super) fn request_id() -> String {
 mod tests {
     use super::*;
     use crate::{
-        DefaultServiceTier, GatewayRuntimeOptions, LocalGatewayKey, ProviderSource,
-        RuntimeLocalKey, RuntimeSource,
+        DefaultServiceTier, GatewayRuntimeOptions, LocalGatewayKey, MessagesReasoningMode,
+        ProviderSource, RuntimeLocalKey, RuntimeSource, SourceAdapter, SourceProtocolBinding,
     };
     use axum::http::{HeaderMap, HeaderValue};
 
@@ -643,6 +764,82 @@ mod tests {
     }
 
     #[test]
+    fn tool_affinity_extracts_all_bounded_output_ids() {
+        let request = json!({
+            "previous_response_id": "resp_old",
+            "input": [
+                {"type": "custom_tool_call_output", "call_id": "ctc_old"},
+                {"type": "custom_tool_call_output", "call_id": "ctc_old"},
+                {"type": "function_call_output", "call_id": "function"},
+                {"type": "custom_tool_call_output", "call_id": "   "}
+            ]
+        });
+        assert_eq!(tool_call_output_ids(&request), vec!["ctc_old", "function"]);
+
+        let response = json!({
+            "id": "resp_old",
+            "output": [{
+                "type": "custom_tool_call",
+                "id": "ctc_item",
+                "call_id": "call_custom",
+                "input": "Get-ChildItem"
+            }]
+        });
+        assert_eq!(
+            response_tool_call_ids(&response),
+            vec!["call_custom", "ctc_item"]
+        );
+
+        let paired = json!({
+            "input": [
+                {"type": "computer_call", "id": "computer_item", "call_id": "computer_call"},
+                {"type": "computer_call_output", "call_id": "computer_call"}
+            ]
+        });
+        assert_eq!(
+            response_tool_call_ids(&paired),
+            vec!["computer_call", "computer_item"]
+        );
+        assert_eq!(tool_call_output_ids(&paired), vec!["computer_call"]);
+    }
+
+    #[test]
+    fn stale_responses_tool_calls_are_removed_only_when_their_output_is_missing() {
+        let mut request = json!({
+            "input": [
+                {"type": "message", "role": "user", "content": "Continue"},
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc_stale",
+                    "call_id": "call_stale",
+                    "name": "PowerShell",
+                    "input": "Get-ChildItem"
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_completed",
+                    "call_id": "call_completed",
+                    "name": "pwd",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_completed",
+                    "output": "C:\\workspace"
+                }
+            ]
+        });
+
+        assert!(drop_unpaired_responses_tool_calls(&mut request));
+        let input = request["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        assert!(input.iter().all(|item| item["call_id"] != "call_stale"));
+        assert!(input.iter().any(|item| item["call_id"] == "call_completed"));
+
+        assert!(!drop_unpaired_responses_tool_calls(&mut request));
+    }
+
+    #[test]
     fn account_requests_normalize_non_array_input() {
         for (input, expected) in [
             (
@@ -737,43 +934,145 @@ mod tests {
             .find(|model| model["slug"] == crate::codex_model_alias("vendor/claude-opus-4-8"))
             .expect("routed Claude model");
         assert_eq!(claude["display_name"], "Claude Opus 4.8");
-        assert_eq!(
-            claude["supported_reasoning_levels"],
-            json!([
-                {"effort": "low", "description": "low"},
-                {"effort": "medium", "description": "medium"},
-                {"effort": "high", "description": "high"},
-                {"effort": "xhigh", "description": "xhigh"},
-                {"effort": "max", "description": "max"},
-                {"effort": "ultra", "description": "ultra"}
-            ])
-        );
-        assert_eq!(claude["default_reasoning_level"], "medium");
+        assert_eq!(claude["supported_reasoning_levels"], json!([]));
+        assert!(claude.get("default_reasoning_level").is_none());
         assert_eq!(claude["input_modalities"], json!(["text", "image"]));
         assert!(models
             .iter()
             .any(|model| { model["slug"] == crate::codex_model_alias("disabled-code") }));
     }
 
-    #[test]
-    fn api_source_reasoning_metadata_is_enabled_until_overridden() {
-        let runtime = GatewayRuntime::from_pool(
+    fn capability_test_runtime(models: &[&str], options: GatewayRuntimeOptions) -> GatewayRuntime {
+        GatewayRuntime::from_pool(
             vec![RuntimeSource::unrestricted(ProviderSource {
                 id: "source".into(),
                 name: "source".into(),
                 base_url: "https://example.test/v1".into(),
                 api_key: "upstream-secret".into(),
                 wire_api: WireApi::Responses,
-                models: vec!["vendor/claude-fable-5".into()],
+                models: models.iter().map(|id| (*id).to_string()).collect(),
             })],
             vec![RuntimeLocalKey::unrestricted(LocalGatewayKey {
                 id: "key".into(),
                 secret: "secret".into(),
             })],
-            GatewayRuntimeOptions::default(),
+            options,
+            Arc::new(|_| {}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn known_model_uses_catalog_capabilities_without_overriding_codex_context() {
+        use crate::model_metadata::{ModelMetadataCatalog, ModelMetadataCatalogHandle};
+        let catalog = ModelMetadataCatalog::from_models_dev_json(
+            r#"{
+            "vendor/claude-fable-5": {"reasoning": true, "reasoning_effort_levels": ["low", "high"],
+            "default_reasoning_effort": "high", "tool_call": true,
+            "modalities": {"input": ["text"], "output": ["text"]}, "limit": {"context": 64000}}
+        }"#,
+        )
+        .unwrap();
+        let runtime = capability_test_runtime(
+            &["vendor/claude-fable-5"],
+            GatewayRuntimeOptions {
+                model_metadata_catalog: Some(ModelMetadataCatalogHandle::new(catalog)),
+                ..GatewayRuntimeOptions::default()
+            },
+        );
+        let key = runtime
+            .authenticate(Some(&HeaderValue::from_static("Bearer secret")))
+            .unwrap();
+        let visible = runtime.visible_models(&key, &[WireApi::Responses], now_ms());
+        let response =
+            build_codex_models_response(&runtime, &key, &visible, &Default::default(), None)
+                .unwrap();
+        let entry = &response["models"][0];
+        assert_eq!(entry["input_modalities"], json!(["text"]));
+        assert!(entry.get("context_window").is_none());
+        assert_eq!(entry["supports_parallel_tool_calls"], true);
+        assert_eq!(entry["default_reasoning_level"], "high");
+        assert_eq!(
+            entry["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(codex_catalog_entry_is_compatible(entry));
+    }
+
+    #[test]
+    fn messages_bridge_adds_codex_ultra_only_as_a_translated_max_alias() {
+        use crate::model_metadata::{ModelMetadataCatalog, ModelMetadataCatalogHandle};
+        let model = "anthropic/claude-fable-5-1";
+        let catalog = ModelMetadataCatalog::from_models_dev_json(
+            r#"{
+            "anthropic/claude-fable-5-1": {
+                "reasoning": true,
+                "reasoning_effort_levels": ["low", "medium", "high", "xhigh", "max"]
+            }}"#,
+        )
+        .unwrap();
+        let source = ProviderSource {
+            id: "source".into(),
+            name: "source".into(),
+            base_url: "https://example.test/v1".into(),
+            api_key: "upstream-secret".into(),
+            wire_api: WireApi::Responses,
+            models: vec![model.into()],
+        };
+        let runtime = GatewayRuntime::from_pool(
+            vec![RuntimeSource {
+                protocol_bindings: vec![SourceProtocolBinding {
+                    wire_api: WireApi::Responses,
+                    adapter: SourceAdapter::ResponsesToMessages,
+                    reasoning_mode: MessagesReasoningMode::Adaptive,
+                    cache_write_ttl: Default::default(),
+                    model_ids: vec![model.into()],
+                }],
+                ..RuntimeSource::unrestricted(source)
+            }],
+            vec![RuntimeLocalKey::unrestricted(LocalGatewayKey {
+                id: "key".into(),
+                secret: "secret".into(),
+            })],
+            GatewayRuntimeOptions {
+                model_metadata_catalog: Some(ModelMetadataCatalogHandle::new(catalog)),
+                ..GatewayRuntimeOptions::default()
+            },
             Arc::new(|_| {}),
         )
         .unwrap();
+        let key = runtime
+            .authenticate(Some(&HeaderValue::from_static("Bearer secret")))
+            .unwrap();
+        let visible = runtime.visible_models(&key, &[WireApi::Responses], now_ms());
+        let response =
+            build_codex_models_response(&runtime, &key, &visible, &Default::default(), None)
+                .unwrap();
+
+        assert_eq!(
+            response["models"][0]["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|level| level["effort"].as_str())
+                .collect::<Vec<_>>(),
+            ["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        // The model metadata remains the official five-level enum; `ultra`
+        // exists only in the Codex projection that translates it to `max`.
+        assert_eq!(
+            runtime.model_capabilities(model).reasoning_effort_levels,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+    }
+
+    #[test]
+    fn provider_reasoning_and_manual_overrides_do_not_grant_unknown_capabilities() {
+        let runtime =
+            capability_test_runtime(&["vendor/claude-fable-5"], GatewayRuntimeOptions::default());
         let key = runtime
             .authenticate(Some(&HeaderValue::from_static("Bearer secret")))
             .unwrap();
@@ -812,19 +1111,11 @@ mod tests {
             model["slug"],
             crate::codex_model_alias("vendor/claude-fable-5")
         );
-        assert_eq!(model["default_reasoning_level"], "medium");
-        assert_eq!(
-            model["supported_reasoning_levels"],
-            json!([
-                {"effort": "low", "description": "Low"},
-                {"effort": "medium", "description": "Medium"},
-                {"effort": "high", "description": "High"},
-                {"effort": "ultra", "description": "Ultra"}
-            ])
-        );
-        assert_eq!(model["supports_reasoning_summary_parameter"], true);
-        assert_eq!(model["supports_reasoning_summaries"], true);
-        assert_eq!(model["default_reasoning_summary"], "detailed");
+        assert!(model.get("default_reasoning_level").is_none());
+        assert_eq!(model["supported_reasoning_levels"], json!([]));
+        assert_eq!(model["supports_reasoning_summary_parameter"], false);
+        assert_eq!(model["supports_reasoning_summaries"], false);
+        assert_eq!(model["default_reasoning_summary"], "none");
         assert!(codex_catalog_entry_is_compatible(model));
 
         runtime
@@ -843,11 +1134,8 @@ mod tests {
         )
         .expect("coding model catalog");
         let configured_model = &configured["models"][0];
-        assert_eq!(configured_model["default_reasoning_level"], "ultra");
-        assert_eq!(
-            configured_model["supported_reasoning_levels"],
-            json!([{"effort": "ultra", "description": "Ultra"}])
-        );
+        assert!(configured_model.get("default_reasoning_level").is_none());
+        assert_eq!(configured_model["supported_reasoning_levels"], json!([]));
 
         runtime
             .set_model_reasoning_allowed_levels(std::collections::BTreeMap::new())
@@ -862,30 +1150,15 @@ mod tests {
         )
         .expect("coding model catalog");
         assert_eq!(
-            no_manual_selection["models"][0]["default_reasoning_level"],
-            "medium"
+            no_manual_selection["models"][0]["supported_reasoning_levels"],
+            json!([])
         );
     }
 
     #[test]
     fn api_source_image_capability_is_published_to_codex() {
-        let runtime = GatewayRuntime::from_pool(
-            vec![RuntimeSource::unrestricted(ProviderSource {
-                id: "source".into(),
-                name: "source".into(),
-                base_url: "https://example.test/v1".into(),
-                api_key: "upstream-secret".into(),
-                wire_api: WireApi::Responses,
-                models: vec!["vendor/claude-fable-5".into()],
-            })],
-            vec![RuntimeLocalKey::unrestricted(LocalGatewayKey {
-                id: "key".into(),
-                secret: "secret".into(),
-            })],
-            GatewayRuntimeOptions::default(),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
+        let runtime =
+            capability_test_runtime(&["vendor/claude-fable-5"], GatewayRuntimeOptions::default());
         let key = runtime
             .authenticate(Some(&HeaderValue::from_static("Bearer secret")))
             .unwrap();
@@ -1051,24 +1324,8 @@ mod tests {
     }
 
     #[test]
-    fn source_context_replaces_stale_codex_context_for_matching_models() {
-        let runtime = GatewayRuntime::from_pool(
-            vec![RuntimeSource::unrestricted(ProviderSource {
-                id: "source".into(),
-                name: "source".into(),
-                base_url: "https://example.test/v1".into(),
-                api_key: "upstream-secret".into(),
-                wire_api: WireApi::Responses,
-                models: vec!["gpt-5.4".into()],
-            })],
-            vec![RuntimeLocalKey::unrestricted(LocalGatewayKey {
-                id: "key".into(),
-                secret: "secret".into(),
-            })],
-            GatewayRuntimeOptions::default(),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
+    fn provider_context_is_not_advertised_for_unknown_models() {
+        let runtime = capability_test_runtime(&["gpt-5.4"], GatewayRuntimeOptions::default());
         let key = runtime
             .authenticate(Some(&HeaderValue::from_static("Bearer secret")))
             .unwrap();
@@ -1093,8 +1350,8 @@ mod tests {
         .expect("coding model catalog");
         let model = &response["models"][0];
 
-        assert_eq!(model["context_window"], 1_000_000);
-        assert_eq!(model["max_context_window"], 1_000_000);
+        assert!(model.get("context_window").is_none());
+        assert!(model.get("max_context_window").is_none());
         assert!(model.get("auto_compact_token_limit").is_none());
     }
 }

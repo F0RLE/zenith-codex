@@ -226,6 +226,71 @@ fn strict_responses_message_item_id_error_is_detected_without_matching_other_ite
     assert!(!responses_message_item_id_requires_msg_prefix(
         br#"{"error":{"message":"Expected an ID that begins with 'msg'."}}"#,
     ));
+    assert!(responses_message_item_id_requires_msg_prefix(
+        br#"{"error":{"message":"text part msg_Upmcar_gD7yF-8YP1qSM8AM not found"}}"#,
+    ));
+    assert!(!responses_message_item_id_requires_msg_prefix(
+        br#"{"error":{"message":"text part fc_123 not found"}}"#,
+    ));
+}
+
+#[test]
+fn missing_tool_output_recovery_matches_only_explicit_responses_errors() {
+    assert!(responses_tool_call_is_missing_output(
+        br#"{"error":{"message":"No tool output found for custom tool call ctc_123"}}"#
+    ));
+    assert!(responses_tool_call_is_missing_output(
+        br#"{"error":{"code":"unanswered_function_call"}}"#
+    ));
+    assert!(!responses_tool_call_is_missing_output(
+        br#"{"error":{"message":"No tool call found for custom tool call output"}}"#
+    ));
+}
+
+#[test]
+fn model_switch_recovery_resets_only_safe_responses_continuations() {
+    let mismatch = br#"{"error":{"message":"Tool call output does not match the model that created the previous response"}}"#;
+    assert!(recoverable_response_model_switch(
+        StatusCode::BAD_REQUEST,
+        "upstream_tool_call_mismatch",
+        true,
+        false,
+        mismatch,
+    ));
+    assert!(recoverable_response_model_switch(
+        StatusCode::BAD_REQUEST,
+        "upstream_invalid_request",
+        true,
+        false,
+        br#"{"error":{"message":"previous_response_id belongs to another model"}}"#,
+    ));
+    assert!(!recoverable_response_model_switch(
+        StatusCode::BAD_REQUEST,
+        "upstream_tool_call_mismatch",
+        true,
+        true,
+        mismatch,
+    ));
+    assert!(!recoverable_response_model_switch(
+        StatusCode::BAD_REQUEST,
+        "upstream_invalid_request",
+        false,
+        false,
+        mismatch,
+    ));
+}
+
+#[test]
+fn prompt_cache_write_rejection_requires_explicit_cache_creation_wording() {
+    assert!(prompt_cache_write_rejected(
+        br#"{"error":{"message":"cache_control ephemeral cache write is unsupported"}}"#
+    ));
+    assert!(prompt_cache_write_rejected(
+        br#"{"error":{"message":"cache creation TTL is invalid"}}"#
+    ));
+    assert!(!prompt_cache_write_rejected(
+        br#"{"error":{"message":"cached input is not available"}}"#
+    ));
 }
 
 #[test]
@@ -513,6 +578,11 @@ fn retry_policy_matches_account_failover_and_official_transient_statuses() {
     assert!(retryable_failure(
         StatusCode::BAD_GATEWAY,
         "upstream_usage_not_included",
+        false
+    ));
+    assert!(!retryable_failure(
+        StatusCode::UNAUTHORIZED,
+        "upstream_unauthorized",
         false
     ));
     assert!(!retryable_failure(

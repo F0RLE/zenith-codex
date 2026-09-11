@@ -41,7 +41,7 @@ export function SettingsPage({ updateCheckState, updateVersion, onCheckUpdates }
 
       <SettingsGroup icon={<RefreshCw aria-hidden />} title={t("settings.application")}>
         <div className="settings-control-row"><div><strong>{t("settings.currentVersion")}</strong><div className="settings-version-meta" role="status" aria-live="polite"><span>v{APP_VERSION}</span><StatusBadge status={updateStatus.status} label={updateStatus.label} /></div></div><Button variant="secondary" icon={<RefreshCw aria-hidden />} busy={updateCheckState === "checking"} onClick={() => void onCheckUpdates()}>{t("common.check")}</Button></div>
-        <div className="settings-control-row settings-path-row"><div><strong>{t("settings.dataPath")}</strong><small><code title={storageInfo?.dataPath}>{storageInfo?.dataPath ?? t(storageUnavailable ? "settings.pathUnavailable" : "settings.pathLoading")}</code></small></div><Button variant="secondary" icon={<FolderOpen aria-hidden />} busy={busy === "open-data"} onClick={() => perform("open-data", () => relayCommands.openFolder("data"), "feedback.opened")}>{t("settings.openData")}</Button></div>
+        <div className="settings-control-row settings-path-row"><div><strong>{t("settings.dataPath")}</strong><small><code data-relay-tooltip={storageInfo?.dataPath}>{storageInfo?.dataPath ?? t(storageUnavailable ? "settings.pathUnavailable" : "settings.pathLoading")}</code></small></div><Button variant="secondary" icon={<FolderOpen aria-hidden />} busy={busy === "open-data"} onClick={() => perform("open-data", () => relayCommands.openFolder("data"), "feedback.opened")}>{t("settings.openData")}</Button></div>
       </SettingsGroup>
 
       {mode === "local" ? <SettingsGroup icon={<Database aria-hidden />} title={t("settings.localData")}>

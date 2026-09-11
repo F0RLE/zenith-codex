@@ -23,7 +23,10 @@ use zenith_relay_core::{
         WakeVerificationOutcome,
     },
     pricing::pricing_refresh_delay,
-    providers::chatgpt::CodexQuotaClient,
+    providers::chatgpt::{
+        configure_codex_client_version, refresh_codex_client_release, CodexQuotaClient,
+        CODEX_RELEASE_REFRESH_INTERVAL,
+    },
     unix_time_ms as current_time_ms,
 };
 
@@ -66,9 +69,52 @@ pub(crate) fn start(app: AppHandle) {
     let _pricing_worker = tauri::async_runtime::spawn(async move {
         pricing_loop(pricing_app).await;
     });
+    let metadata_app = app.clone();
+    let _metadata_worker = tauri::async_runtime::spawn(async move {
+        model_metadata_loop(metadata_app).await;
+    });
+    let codex_release_app = app.clone();
+    let _codex_release_worker = tauri::async_runtime::spawn(async move {
+        codex_release_loop(codex_release_app).await;
+    });
     let _wake_worker = tauri::async_runtime::spawn(async move {
         wake_loop(app).await;
     });
+}
+
+/// Keeps Relay's own OAuth identity aligned with the newest published Rust
+/// Codex release. This is intentionally independent of pool activity: a
+/// paused or empty pool must still pick up a newer identity for its next use.
+async fn codex_release_loop(_app: AppHandle) {
+    loop {
+        if let Ok(release) = refresh_codex_client_release().await {
+            let _ = configure_codex_client_version(release.version());
+        }
+        tokio::time::sleep(CODEX_RELEASE_REFRESH_INTERVAL).await;
+    }
+}
+
+async fn model_metadata_loop(app: AppHandle) {
+    let instance_id = app
+        .state::<DesktopState>()
+        .root
+        .to_string_lossy()
+        .into_owned();
+    loop {
+        let loader = app.state::<DesktopState>().model_metadata_loader();
+        let now_ms = current_time_ms();
+        let delay =
+            pricing_refresh_delay(&instance_id, loader.next_refresh_deadline(now_ms), now_ms);
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = loader.wait_for_schedule_change() => continue,
+        }
+        let loader = app.state::<DesktopState>().model_metadata_loader();
+        if loader.refresh_due(current_time_ms()) {
+            let _ = loader.refresh(false).await;
+            let _ = app.emit("zenith-state-changed", ());
+        }
+    }
 }
 
 async fn pricing_loop(app: AppHandle) {
@@ -907,6 +953,8 @@ mod tests {
             weight: 1,
             cooldowns: Default::default(),
             consecutive_failures: 0,
+            client_auth_status: None,
+            last_client_login_redirect_at_ms: None,
         }
     }
 

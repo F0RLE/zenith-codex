@@ -73,6 +73,63 @@ async fn responses_websocket_falls_back_to_http_sse_upstream() {
 }
 
 #[tokio::test]
+async fn responses_websocket_fallback_does_not_append_error_after_partial_output() {
+    let (upstream, _) = spawn_upstream().await;
+    let (gateway, _) = spawn_gateway(&upstream.base_url, vec!["gpt-test"]).await;
+    let upgraded = reqwest::Client::new()
+        .get(format!("{}/v1/responses", gateway.base_url))
+        .bearer_auth(LOCAL_KEY)
+        .upgrade()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upgraded.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let mut socket = upgraded.into_websocket().await.unwrap();
+    socket
+        .send(ClientWsMessage::Text(
+            json!({
+                "type": "response.create",
+                "model": "gpt-test",
+                "input": "partial-truncated-stream"
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+    let mut saw_partial = false;
+    let mut saw_error = false;
+    let mut saw_close = false;
+    for _ in 0..8 {
+        let message = match tokio::time::timeout(Duration::from_secs(2), socket.next()).await {
+            Ok(Some(Ok(message))) => message,
+            _ => break,
+        };
+        match message {
+            ClientWsMessage::Text(text) => {
+                let value: Value = serde_json::from_str(text.as_ref()).unwrap();
+                saw_partial |= value["type"] == "response.output_text.delta";
+                saw_error |= value["type"] == "error" || value["type"] == "response.failed";
+            }
+            ClientWsMessage::Close { .. } => {
+                saw_close = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_partial, "fallback did not forward the partial output");
+    assert!(
+        !saw_error,
+        "fallback appended an error after partial output"
+    );
+    assert!(
+        saw_close,
+        "fallback did not close after an incomplete stream"
+    );
+}
+
+#[tokio::test]
 async fn responses_websocket_fallback_locks_the_first_later_stream_id() {
     let (upstream, state) = spawn_upstream().await;
     let (gateway, _) = spawn_gateway(&upstream.base_url, vec!["gpt-test"]).await;
@@ -976,7 +1033,7 @@ async fn oversized_non_stream_response_is_rejected_and_recorded() {
 }
 
 #[tokio::test]
-async fn first_sse_bytes_commit_the_stream_without_waiting_for_text_output() {
+async fn stream_prelude_is_buffered_until_the_first_text_output() {
     let (upstream, state) = spawn_upstream().await;
     let (gateway, events) = spawn_gateway(&upstream.base_url, vec!["gpt-test"]).await;
 
@@ -990,9 +1047,10 @@ async fn first_sse_bytes_commit_the_stream_without_waiting_for_text_output() {
             .await
             .unwrap()
     });
+    state.release_stream.notify_one();
     let response = tokio::time::timeout(Duration::from_secs(1), response_task)
         .await
-        .expect("the first native SSE bytes should establish the stream")
+        .expect("the first native SSE output should establish the stream")
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -1006,26 +1064,20 @@ async fn first_sse_bytes_commit_the_stream_without_waiting_for_text_output() {
     let mut chunks = response.bytes_stream();
     let first = tokio::time::timeout(Duration::from_secs(1), chunks.next())
         .await
-        .expect("first native SSE chunk was not forwarded")
+        .expect("buffered native SSE frames were not forwarded")
         .unwrap()
         .unwrap();
-    assert_eq!(first, "data: {\"type\":\"response.created\"}\n\n");
-    state.release_stream.notify_one();
+    let first = std::str::from_utf8(&first).unwrap();
+    assert!(first.contains("data: {\"type\":\"response.created\"}\n\n"));
+    assert!(
+        first.contains("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n")
+    );
     let second = tokio::time::timeout(Duration::from_secs(1), chunks.next())
         .await
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(
-        second,
-        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
-    );
-    let third = tokio::time::timeout(Duration::from_secs(1), chunks.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(third, "data: [DONE]\n\n");
+    assert_eq!(second, "data: [DONE]\n\n");
     assert!(chunks.next().await.is_none());
 
     let requests = state.requests.lock().unwrap();
@@ -1159,7 +1211,7 @@ async fn responses_never_bridge_to_chat_completions_sources() {
 }
 
 #[tokio::test]
-async fn truncated_started_stream_reports_failure_in_sse_and_is_recorded_as_incomplete() {
+async fn truncated_prelude_stream_returns_one_terminal_error_and_is_recorded_as_incomplete() {
     let (upstream, _) = spawn_upstream().await;
     let (gateway, events) = spawn_gateway(&upstream.base_url, vec!["gpt-test"]).await;
     let response = reqwest::Client::new()
@@ -1173,11 +1225,9 @@ async fn truncated_started_stream_reports_failure_in_sse_and_is_recorded_as_inco
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.text().await.unwrap();
-    assert!(body.contains("data: {\"type\":\"response.created\"}"));
-    assert!(body.contains("event: response.failed"));
-    assert!(body.contains("stream_incomplete"));
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "stream_incomplete");
 
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1);
@@ -2944,6 +2994,22 @@ async fn upstream_responses(
         let chunks = stream::iter([Ok::<_, Infallible>(Bytes::from_static(
             b"data: {\"type\":\"response.created\"}\n\n",
         ))]);
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .body(Body::from_stream(chunks))
+            .unwrap();
+    }
+
+    if request.get("input").and_then(Value::as_str) == Some("partial-truncated-stream") {
+        let chunks = stream::iter([
+            Ok::<_, Infallible>(Bytes::from_static(
+                b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"partial-response\"}}\n\n",
+            )),
+            Ok::<_, Infallible>(Bytes::from_static(
+                b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+            )),
+        ]);
         return Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "text/event-stream")

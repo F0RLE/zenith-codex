@@ -75,6 +75,7 @@ pub(crate) async fn stage_returned_remote_account(
         true,
         true,
         &configured_models,
+        state.account_check_url(),
     )
     .await
     .map_err(|error| {
@@ -110,6 +111,7 @@ pub(super) async fn import_account_item(
     discover_models: bool,
     probe_quota: bool,
     configured_models: &[String],
+    account_check_endpoint: &url::Url,
 ) -> ItemResult<(LocalAccountRecord, AccountQuotaOutcome)> {
     ensure_account_import_item(&item)?;
     let issued_at_ms = current_time_ms();
@@ -131,6 +133,7 @@ pub(super) async fn import_account_item(
         context.subscription_active_until_ms,
         import_proxy,
         settings.quota_request_timeout_seconds,
+        account_check_endpoint,
     )
     .await?;
     let provider_account_id = material.provider_account_id.as_deref().ok_or_else(|| {
@@ -198,13 +201,15 @@ pub(super) async fn import_account_item(
         .is_none_or(|agent| agent.task_id().is_some());
     let discovered_models = if discover_models && identity_is_registered {
         let client = CodexModelsClient::new_with_proxy(proxy.as_ref()).map_err(model_item_error)?;
+        let client_version =
+            zenith_relay_core::providers::chatgpt::configured_codex_client_version();
         let models = client
             .discover_authorized(
                 credentials
                     .authorization(issued_at_ms)
                     .map_err(credential_item_error)?,
                 provider_account_id,
-                zenith_relay_core::providers::chatgpt::CODEX_MODELS_CLIENT_VERSION,
+                &client_version,
             )
             .await
             .map_err(model_item_error)?;

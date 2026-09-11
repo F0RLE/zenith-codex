@@ -1,5 +1,6 @@
 use crate::accounts::{TokenAuthority, TokenPersistenceAdapter, TokenRefreshAdapter};
 use crate::catalog::{normalize_model_reasoning_allowed_levels, SourceReasoningCapabilities};
+use crate::model_metadata::ModelMetadataCatalogHandle;
 use crate::pricing::PricingCatalog;
 use crate::protocol::ClientWireApi;
 use crate::providers::chatgpt::{
@@ -95,20 +96,6 @@ fn source_candidate_id(
     }
     let suffix = binding.adapter.route_suffix(binding.wire_api);
     format!("{source_id}::{suffix}")
-}
-
-fn apply_model_display_order(models: &mut [String], saved_order: &[String]) {
-    let positions = saved_order
-        .iter()
-        .enumerate()
-        .map(|(position, model)| (model.to_ascii_lowercase(), position))
-        .collect::<BTreeMap<_, _>>();
-    models.sort_by_key(|model| {
-        positions
-            .get(&model.to_ascii_lowercase())
-            .copied()
-            .unwrap_or(usize::MAX)
-    });
 }
 
 fn source_reasoning_for_route(
@@ -386,6 +373,9 @@ pub struct GatewayRuntimeOptions {
     /// Immutable pricing snapshot used only to rank the automatic image
     /// bridge model. A missing or empty snapshot never blocks runtime build.
     pub image_pricing_catalog: Option<Arc<PricingCatalog>>,
+    /// Advisory presentation metadata. It only orders model-list responses;
+    /// admission and routing remain owned by the runtime registry.
+    pub model_metadata_catalog: Option<ModelMetadataCatalogHandle>,
     /// Manually enabled source-model reasoning efforts. An absent model
     /// exposes no reasoning selector for API sources.
     pub model_reasoning_allowed_levels: BTreeMap<String, Vec<String>>,
@@ -414,6 +404,10 @@ impl fmt::Debug for GatewayRuntimeOptions {
                 &self.image_pricing_catalog.as_ref().map(|_| "configured"),
             )
             .field(
+                "model_metadata_catalog",
+                &self.model_metadata_catalog.as_ref().map(|_| "configured"),
+            )
+            .field(
                 "model_reasoning_allowed_levels",
                 &self.model_reasoning_allowed_levels,
             )
@@ -439,6 +433,7 @@ impl Default for GatewayRuntimeOptions {
             quota_stale_after_ms: crate::QUOTA_STALE_AFTER_MS,
             image_base_model: None,
             image_pricing_catalog: None,
+            model_metadata_catalog: None,
             model_reasoning_allowed_levels: BTreeMap::new(),
             response_affinity_store: None,
             provider_storm_breaker: false,
@@ -465,6 +460,7 @@ pub struct GatewayRuntime {
     model_reasoning_allowed_levels: Mutex<BTreeMap<String, Vec<String>>>,
     model_service_tier_overrides: Mutex<BTreeMap<String, DefaultServiceTier>>,
     model_display_order: Mutex<Vec<String>>,
+    model_metadata_catalog: Option<ModelMetadataCatalogHandle>,
     passive_quotas: Mutex<BTreeMap<String, PassiveQuotaState>>,
     messages_bridge_store: Mutex<crate::MessagesBridgeStore>,
     native_responses_replay_store: Mutex<NativeResponsesReplayStore>,
@@ -681,6 +677,9 @@ pub(crate) struct ExecutorRoute {
     pub(crate) candidate_id: String,
     pub(crate) source_id: String,
     pub(crate) account_id: Option<String>,
+    /// The exact OAuth token generation that was used for this upstream
+    /// request. This is request-local provenance, not route configuration.
+    pub(crate) account_token_generation: Option<u64>,
     pub(crate) client_context_id: Option<String>,
     pub(crate) scope: CandidateScope,
     pub(crate) allowed_protocols: Vec<WireApi>,
@@ -712,6 +711,14 @@ pub(crate) struct PreparedAuthorization {
     pub(crate) identity: Option<CodexIdentityEnvelope>,
     pub(crate) token_generation: Option<u64>,
     pub(crate) agent_task_id: Option<String>,
+}
+
+/// The upstream response together with the exact OAuth credential generation
+/// that authorized it. Keeping this alongside the response lets delayed usage
+/// callbacks distinguish an old 401 from a failure of a newer login.
+pub(crate) struct AuthorizedResponse {
+    pub(crate) response: reqwest::Response,
+    pub(crate) account_token_generation: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -935,6 +942,7 @@ impl GatewayRuntime {
             model_reasoning_allowed_levels: Mutex::new(model_reasoning_allowed_levels),
             model_service_tier_overrides: Mutex::new(BTreeMap::new()),
             model_display_order: Mutex::new(Vec::new()),
+            model_metadata_catalog: options.model_metadata_catalog.clone(),
             passive_quotas: Mutex::new(account_parts.passive_quotas),
             messages_bridge_store: Mutex::new(crate::MessagesBridgeStore::default()),
             native_responses_replay_store: Mutex::new(NativeResponsesReplayStore::default()),
@@ -1002,6 +1010,24 @@ impl GatewayRuntime {
 
     pub fn set_codex_websockets_enabled(&self, enabled: bool) {
         self.control.set_codex_websockets_enabled(enabled);
+    }
+
+    pub fn chatgpt_retry_until_available(&self) -> bool {
+        self.control.chatgpt_retry_until_available()
+    }
+
+    pub fn set_chatgpt_retry_until_available(&self, enabled: bool) {
+        self.control.set_chatgpt_retry_until_available(enabled);
+    }
+
+    /// Maximum time a managed ChatGPT request may wait for a transiently
+    /// unavailable candidate before returning a machine-readable 503.
+    pub fn chatgpt_retry_window_ms(&self) -> u64 {
+        self.control.chatgpt_retry_window_ms()
+    }
+
+    pub fn set_chatgpt_retry_window_ms(&self, value: u64) {
+        self.control.set_chatgpt_retry_window_ms(value);
     }
 
     pub(crate) fn mark_request_origin(&self, request_id: &str, origin: &'static str) {
@@ -1102,12 +1128,49 @@ impl GatewayRuntime {
         self.resolve_from_visible(key, model, &visible)
     }
 
+    /// Resolves a model that belongs to at least one configured route even
+    /// when every such route is temporarily hidden by runtime health. This is
+    /// deliberately narrower than `resolve_model`: unknown model ids must
+    /// still fail admission instead of occupying a retry window.
+    pub(crate) fn resolve_configured_model(
+        &self,
+        key: &AuthenticatedKey,
+        model: &str,
+        allowed_protocols: &[WireApi],
+    ) -> Option<String> {
+        let scope = key.scope_snapshot();
+        let scheduler = self.lock_scheduler();
+        let resolve = |candidate: &str| {
+            let resolved = self.resolve_model(key, candidate)?;
+            scheduler
+                .candidates()
+                .any(|candidate| candidate.is_configured(&resolved, allowed_protocols, &scope))
+                .then_some(resolved)
+        };
+        resolve(model).or_else(|| decode_codex_model_alias(model).and_then(|id| resolve(&id)))
+    }
+
     pub(crate) fn resolve_visible_account_model(
         &self,
         key: &AuthenticatedKey,
         model: &str,
     ) -> Option<String> {
         self.resolve_from_visible(key, model, &self.visible_account_models(key))
+    }
+
+    pub(crate) fn resolve_configured_account_model(
+        &self,
+        key: &AuthenticatedKey,
+        model: &str,
+    ) -> Option<String> {
+        let resolve = |candidate: &str| {
+            let resolved = self.resolve_model(key, candidate)?;
+            (!self
+                .codex_model_chatgpt_account_ids_for_resolved(key, &resolved)
+                .is_empty())
+            .then_some(resolved)
+        };
+        resolve(model).or_else(|| decode_codex_model_alias(model).and_then(|id| resolve(&id)))
     }
 
     fn resolve_from_visible(
@@ -1146,7 +1209,14 @@ impl GatewayRuntime {
             .model_display_order
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        apply_model_display_order(&mut models, &order);
+        models = self.model_metadata_catalog.as_ref().map_or_else(
+            || crate::normalize_model_ids(models.iter()),
+            |catalog| {
+                catalog
+                    .snapshot()
+                    .merge_display_order(models.iter(), &order)
+            },
+        );
         models
             .into_iter()
             .map(|model| match key.model_prefix.as_deref() {
@@ -1232,6 +1302,7 @@ impl GatewayRuntime {
     /// union of efforts declared by at least one source. Discovery metadata
     /// only informs the picker: source routing stays model-based and request
     /// admission never depends on reasoning metadata.
+    #[cfg(test)]
     pub(crate) async fn codex_source_model_metadata(
         &self,
         key: &AuthenticatedKey,
@@ -1328,6 +1399,7 @@ impl GatewayRuntime {
             candidate_id: candidate_id.to_string(),
             source_id: binding.source_id.clone(),
             account_id: None,
+            account_token_generation: None,
             client_context_id: None,
             scope: scope.clone(),
             allowed_protocols: allowed_protocols.to_vec(),
@@ -1354,6 +1426,7 @@ impl GatewayRuntime {
             candidate_id: account.id.clone(),
             source_id: account.source_id.clone(),
             account_id: Some(account.id.clone()),
+            account_token_generation: None,
             client_context_id: None,
             scope: scope.clone(),
             allowed_protocols: allowed_protocols.to_vec(),

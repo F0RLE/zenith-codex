@@ -2,7 +2,6 @@ use std::{env, time::Instant};
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use crate::{
-    codex_config::ensure_provider_on_launch,
     local_pool, platform,
     tray::{build_tray, close_main_window, AppState},
 };
@@ -213,6 +212,7 @@ pub fn run() {
             let relay_state = local_pool::initialize(&handle)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             app.manage(relay_state);
+            local_pool::start_client_auth_watchdog(handle.clone());
             let native_startup_ms = started.elapsed().as_secs_f64() * 1_000.0;
             let relay_state = app.state::<local_pool::DesktopState>();
             let _ =
@@ -231,8 +231,6 @@ pub fn run() {
                 relay_state.set_background_session_active(false);
             }
             local_pool::background::start(handle.clone());
-            let relay_state = app.state::<local_pool::DesktopState>();
-            let _ = ensure_provider_on_launch(&relay_state.ready_api_backup_root());
             let state = app.state::<AppState>();
             build_tray(&handle, &state)?;
             crate::portable_update::acknowledge_startup();
@@ -306,6 +304,7 @@ pub fn run() {
             local_pool::accounts::mutations::delete_local_account,
             local_pool::accounts::mutations::delete_local_accounts,
             local_pool::accounts::quota_refresh::refresh_local_account_quota,
+            local_pool::accounts::quota_refresh::force_refresh_local_account_credentials,
             local_pool::accounts::quota_refresh::refresh_all_local_account_quotas,
             local_pool::accounts::reset_credits::consume_local_reset_credit,
             local_pool::commands::oauth::start_codex_oauth,
@@ -339,6 +338,7 @@ pub fn run() {
             local_pool::commands::gateway::set_local_common_proxy,
             local_pool::commands::gateway::set_local_account_proxy_required,
             local_pool::commands::gateway::set_local_codex_background_tasks,
+            local_pool::commands::gateway::set_local_chatgpt_retry_until_available,
             local_pool::commands::gateway::set_local_codex_websockets,
             local_pool::commands::gateway::set_codex_profile_websockets,
             local_pool::commands::gateway::diagnose_local_gateway,
@@ -363,6 +363,7 @@ pub fn run() {
             local_pool::commands::opencode::get_opencode_config_status,
             local_pool::commands::opencode::create_opencode_snapshot,
             local_pool::commands::opencode::connect_opencode_to_local_gateway,
+            local_pool::commands::opencode::launch_opencode_source,
             local_pool::commands::opencode::restart_opencode_app,
             local_pool::commands::opencode::restore_opencode_config,
             local_pool::commands::recovery::get_relay_storage_info,

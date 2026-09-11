@@ -1,3 +1,4 @@
+use crate::providers::chatgpt::valid_codex_client_version;
 use crate::runtime::DefaultServiceTier;
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use sha2::{Digest, Sha256};
@@ -56,6 +57,24 @@ const CLIENT_CONTEXT_HEADERS: &[&str] = &[
     "x-codex-installation-id",
 ];
 
+const MANAGED_CODEX_USER_AGENT_PREFIXES: &[&str] = &[
+    "codex desktop/",
+    "codex-tui/",
+    "codex_cli_rs/",
+    "chatgptdesktop/",
+];
+
+const MANAGED_CODEX_ORIGINATORS: &[&str] = &[
+    "codex_cli_rs",
+    "codex-tui",
+    "codex desktop",
+    "chatgpt desktop",
+    "chatgptdesktop",
+];
+
+const CODEX_VERSION_USER_AGENT_PREFIXES: &[&str] =
+    &["codex desktop/", "codex-tui/", "codex_cli_rs/"];
+
 /// Returns a stable, privacy-safe identifier for the client stream that sent
 /// a request. Raw session, thread, installation, and window values never
 /// leave this function.
@@ -88,15 +107,29 @@ pub(in crate::gateway) fn is_managed_codex_client(headers: &HeaderMap) -> bool {
     {
         return true;
     }
-    ["originator", "user-agent"].into_iter().any(|name| {
-        headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| {
-                let value = value.to_ascii_lowercase();
-                value.contains("codex") || value.contains("chatgpt")
-            })
-    })
+    let originator_is_managed = headers
+        .get("originator")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|value| {
+            MANAGED_CODEX_ORIGINATORS
+                .iter()
+                .any(|identity| value.eq_ignore_ascii_case(identity))
+        });
+    if originator_is_managed {
+        return true;
+    }
+
+    headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| {
+            value == "codex_cli_rs"
+                || MANAGED_CODEX_USER_AGENT_PREFIXES
+                    .iter()
+                    .any(|prefix| value.starts_with(prefix))
+        })
 }
 
 pub(in crate::gateway) fn forwarded_codex_headers(
@@ -129,6 +162,33 @@ pub(in crate::gateway) fn forwarded_codex_headers(
         }
     }
     headers
+}
+
+pub(in crate::gateway) fn codex_client_version(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| valid_codex_client_version(value))
+        .or_else(|| {
+            headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .and_then(codex_version_from_user_agent)
+        })
+}
+
+fn codex_version_from_user_agent(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let lowercase = value.to_ascii_lowercase();
+    CODEX_VERSION_USER_AGENT_PREFIXES.iter().find_map(|prefix| {
+        lowercase
+            .strip_prefix(prefix)
+            .and_then(|_| value.get(prefix.len()..))
+            .and_then(|value| value.split_whitespace().next())
+            .map(str::trim)
+            .filter(|value| valid_codex_client_version(value))
+    })
 }
 
 /// Rebuilds the Codex routing hint for the concrete OAuth route selected by
@@ -209,6 +269,7 @@ pub(in crate::gateway) fn forwarded_messages_headers(client_headers: &HeaderMap)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::chatgpt::CODEX_CLIENT_VERSION;
     use axum::http::header::AUTHORIZATION;
 
     #[test]
@@ -246,9 +307,31 @@ mod tests {
         let generic = HeaderMap::new();
         assert!(!is_managed_codex_client(&generic));
 
+        for (name, value) in [
+            ("originator", "my-codex-integration"),
+            ("originator", "chatgpt-client"),
+            ("user-agent", "my-chatgpt-wrapper/1.0"),
+            ("user-agent", "my Codex Desktop/1.0 wrapper"),
+        ] {
+            let mut generic_named_client = HeaderMap::new();
+            generic_named_client.insert(name, HeaderValue::from_static(value));
+            assert!(
+                !is_managed_codex_client(&generic_named_client),
+                "{name}: {value} must remain client-owned"
+            );
+        }
+
         let mut codex = HeaderMap::new();
         codex.insert("originator", HeaderValue::from_static("codex_cli_rs"));
         assert!(is_managed_codex_client(&codex));
+
+        let mut desktop_codex = HeaderMap::new();
+        desktop_codex.insert(
+            "user-agent",
+            HeaderValue::from_str(&format!("Codex Desktop/{CODEX_CLIENT_VERSION} (Windows)"))
+                .unwrap(),
+        );
+        assert!(is_managed_codex_client(&desktop_codex));
 
         let mut metadata_only = HeaderMap::new();
         metadata_only.insert("x-codex-session-id", HeaderValue::from_static("session-1"));
@@ -257,6 +340,40 @@ mod tests {
         let mut chatgpt = HeaderMap::new();
         chatgpt.insert("user-agent", HeaderValue::from_static("ChatGPTDesktop/1.0"));
         assert!(is_managed_codex_client(&chatgpt));
+    }
+
+    #[test]
+    fn codex_client_version_accepts_only_valid_announced_versions() {
+        let mut headers = HeaderMap::new();
+        headers.insert("version", HeaderValue::from_static(CODEX_CLIENT_VERSION));
+        assert_eq!(codex_client_version(&headers), Some(CODEX_CLIENT_VERSION));
+        headers.insert("version", HeaderValue::from_static("not a version"));
+        assert_eq!(codex_client_version(&headers), None);
+        headers.remove("version");
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_str(&format!(
+                "codex-tui/{CODEX_CLIENT_VERSION} (Windows NT 10.0; x64)"
+            ))
+            .unwrap(),
+        );
+        assert_eq!(codex_client_version(&headers), Some(CODEX_CLIENT_VERSION));
+
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_static("Codex Desktop/0.166.0 (Windows; x86_64)"),
+        );
+        assert_eq!(codex_client_version(&headers), Some("0.166.0"));
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_static("codex_cli_rs/0.167.0"),
+        );
+        assert_eq!(codex_client_version(&headers), Some("0.167.0"));
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_static("wrapper Codex Desktop/0.168.0"),
+        );
+        assert_eq!(codex_client_version(&headers), None);
     }
 
     #[test]
